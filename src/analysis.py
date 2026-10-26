@@ -45,3 +45,69 @@ def props_table(scan, side="Over"):
         for r in scan.itertuples()
     ]
     return pd.DataFrame(rows, columns=["PLAYER", "GAME", "LINE", "L5", "L10", "L20"])
+
+
+def _pct(hits, games):
+    return round(100 * hits / len(games), 1) if games else None
+
+
+def win_rate(games, n):
+    """Percent of a team's last n games that were wins. games are {'for', 'against'} newest first."""
+    last = games[:n]
+    return _pct(sum(g["for"] > g["against"] for g in last), last)
+
+
+def cover_rate(games, spread, n):
+    """Percent of the last n games where the team would have covered today's spread.
+
+    spread is this team's number: -3.5 means favored by 3.5, so they must win by 4 or more.
+    A push (margin exactly equals the spread) isn't a cover.
+    """
+    last = games[:n]
+    return _pct(sum(g["for"] - g["against"] + spread > 0 for g in last), last)
+
+
+def over_rate(games, total, n):
+    """Percent of the last n games whose combined score went over today's total."""
+    last = games[:n]
+    return _pct(sum(g["for"] + g["against"] > total for g in last), last)
+
+
+def sides_table(lines, form):
+    """Two rows per game (one per team): moneyline, spread, and recent win and cover rates.
+
+    form maps team name -> its recent games (or None if we couldn't load them).
+    """
+    rows = []
+    for g in lines.itertuples():
+        for team, opp, ml, spread in (
+            (g.HOME, g.AWAY, g.ML_HOME, g.SPREAD_HOME),
+            (g.AWAY, g.HOME, g.ML_AWAY, None if pd.isna(g.SPREAD_HOME) else -g.SPREAD_HOME),
+        ):
+            games = form.get(team) or []
+            has_spread = spread is not None and not pd.isna(spread)
+            rows.append({
+                "TEAM": team, "OPP": opp, "ML": ml, "SPREAD": spread,
+                "WIN_L5": win_rate(games, 5), "WIN_L10": win_rate(games, 10),
+                "COVER_L5": cover_rate(games, spread, 5) if has_spread else None,
+                "COVER_L10": cover_rate(games, spread, 10) if has_spread else None,
+            })
+    return pd.DataFrame(rows, columns=["TEAM", "OPP", "ML", "SPREAD", "WIN_L5", "WIN_L10",
+                                       "COVER_L5", "COVER_L10"])
+
+
+def totals_table(lines, form):
+    """One row per game: the total, how often each team's recent games went over it, and the
+    average combined score of both teams' last 10 games."""
+    rows = []
+    for g in lines.itertuples():
+        home, away = form.get(g.HOME) or [], form.get(g.AWAY) or []
+        has_total = not pd.isna(g.TOTAL)
+        combined = [x["for"] + x["against"] for x in home[:10] + away[:10]]
+        rows.append({
+            "GAME": g.GAME, "TOTAL": g.TOTAL,
+            "HOME_OVER_L10": over_rate(home, g.TOTAL, 10) if has_total else None,
+            "AWAY_OVER_L10": over_rate(away, g.TOTAL, 10) if has_total else None,
+            "AVG_COMBINED": round(sum(combined) / len(combined), 1) if combined else None,
+        })
+    return pd.DataFrame(rows, columns=["GAME", "TOTAL", "HOME_OVER_L10", "AWAY_OVER_L10", "AVG_COMBINED"])

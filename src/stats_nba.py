@@ -109,3 +109,53 @@ def get_recent_points(name, n=20):
     """A player's last n point totals, newest first, or None if the player isn't found."""
     logs = get_game_logs(name, n=n)
     return None if logs is None else [int(p) for p in logs["PTS"]]
+
+
+def _teams():
+    """All NBA teams as dicts with 'id' and 'full_name' (cached for the day)."""
+    teams = cache.get("bdl_teams")
+    if teams is None:
+        teams = _get("/teams", {})["data"]
+        cache.put("bdl_teams", teams)
+    return teams
+
+
+def _fetch_team_games(team_id, season):
+    """Finished games for one team and season as {'date', 'for', 'against'} dicts."""
+    games, cursor = [], None
+    for _ in range(3):  # a season can run past one page of 100 games with the playoffs
+        params = {"team_ids[]": team_id, "seasons[]": season, "per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/games", params)
+        for g in data["data"]:
+            if g.get("status") != "Final":
+                continue
+            home = g["home_team"]["id"] == team_id
+            mine, theirs = g["home_team_score"], g["visitor_team_score"]
+            games.append({"date": g["date"][:10],
+                          "for": mine if home else theirs, "against": theirs if home else mine})
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
+    return games
+
+
+def get_team_games(team_name, n=20):
+    """A team's last n finished games (newest first) as {'for', 'against'} point totals.
+
+    team_name is the full name, like 'Boston Celtics'. Returns None if the team isn't found.
+    """
+    team = next((t for t in _teams() if t["full_name"].lower() == team_name.lower()), None)
+    if team is None:
+        return None
+    key = f"bdl_teamgames_{team['id']}"
+    games = cache.get(key)
+    if games is None:
+        season = _current_season()
+        games = _fetch_team_games(team["id"], season)
+        if len(games) < n:  # early in a season, so also pull last season
+            games += _fetch_team_games(team["id"], season - 1)
+        games.sort(key=lambda g: g["date"], reverse=True)
+        cache.put(key, games)
+    return [{"for": g["for"], "against": g["against"]} for g in games[:n]]

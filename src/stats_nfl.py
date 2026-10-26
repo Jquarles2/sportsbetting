@@ -25,6 +25,8 @@ MARKETS = {
 }
 KEEP = ["player_display_name", "season", "week", "season_type", "passing_yards",
         "rushing_yards", "receiving_yards", "receptions"]
+GAMES_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
+TEAMS_URL = "https://github.com/nflverse/nflverse-data/releases/download/teams/teams_colors_logos.csv"
 SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
 
 
@@ -79,3 +81,46 @@ def get_recent_values(name, market, n=20):
     if rows.empty:
         return None
     return [int(v) for v in rows[column].head(n)]
+
+
+def _download_results():
+    """Every finished NFL game since last season as dicts: season, week, home, away, scores.
+
+    nflverse's schedule uses abbreviations like 'KC', so we swap them for full team names
+    to match The Odds API.
+    """
+    names = pd.read_csv(io.StringIO(requests.get(TEAMS_URL, timeout=60).text))
+    names = dict(zip(names["team_abbr"], names["team_name"]))
+    resp = requests.get(GAMES_URL, timeout=60)
+    resp.raise_for_status()
+    df = pd.read_csv(io.StringIO(resp.text), usecols=["season", "week", "home_team", "away_team",
+                                                      "home_score", "away_score"])
+    df = df[df["season"] >= _current_season() - 1].dropna(subset=["home_score", "away_score"])
+    df["home"] = df["home_team"].map(names)
+    df["away"] = df["away_team"].map(names)
+    return df[["season", "week", "home", "away", "home_score", "away_score"]].to_dict("records")
+
+
+@lru_cache(maxsize=2)
+def _load_results(day):
+    rows = cache.get("nfl_results")
+    if rows is None:
+        rows = _download_results()
+        cache.put("nfl_results", rows)
+    return pd.DataFrame(rows, columns=["season", "week", "home", "away", "home_score", "away_score"])
+
+
+def get_team_games(team_name, n=20):
+    """A team's last n finished games (newest first) as {'for', 'against'} point totals.
+
+    team_name is the full name, like 'Kansas City Chiefs'. Returns None if the team isn't found.
+    """
+    df = _load_results(date.today().isoformat())
+    df = df[(df["home"] == team_name) | (df["away"] == team_name)]
+    if df.empty:
+        return None
+    df = df.sort_values(["season", "week"], ascending=False).head(n)
+    at_home = df["home"] == team_name
+    mine = df["home_score"].where(at_home, df["away_score"])
+    theirs = df["away_score"].where(at_home, df["home_score"])
+    return [{"for": int(m), "against": int(t)} for m, t in zip(mine, theirs)]

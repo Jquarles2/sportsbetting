@@ -16,6 +16,8 @@ NBA = "basketball_nba"
 NFL = "americanfootball_nfl"
 BOOKMAKER = "fanduel"  # the only book we use
 COLUMNS = ["PLAYER", "GAME", "BOOK", "LINE", "OVER", "UNDER", "START"]
+LINE_COLUMNS = ["GAME", "HOME", "AWAY", "START", "ML_HOME", "ML_AWAY", "SPREAD_HOME",
+                "SPREAD_HOME_PRICE", "SPREAD_AWAY_PRICE", "TOTAL", "OVER", "UNDER"]
 
 
 def _get(path, params):
@@ -88,3 +90,50 @@ def get_todays_props(sport=NBA, market="player_points", hours=24):
 
     df = pd.DataFrame(cached["rows"], columns=COLUMNS)
     return df.sort_values(["PLAYER", "BOOK"]).reset_index(drop=True), cached["remaining"]
+
+
+def parse_game_lines(event):
+    """Turn one game from the /odds endpoint into a flat row of moneyline, spread and total.
+
+    SPREAD_HOME is the home team's number (e.g. -3.5 means home is favored by 3.5); the away
+    team's number is the opposite. Returns None if the book has no odds for the game yet.
+    """
+    books = event.get("bookmakers", [])
+    if not books:
+        return None
+    home, away = event["home_team"], event["away_team"]
+    row = dict.fromkeys(LINE_COLUMNS)
+    row.update(GAME=f"{away} @ {home}", HOME=home, AWAY=away, START=event["commence_time"])
+    for market in books[0]["markets"]:
+        for o in market["outcomes"]:
+            side = "HOME" if o["name"] == home else "AWAY"
+            if market["key"] == "h2h":
+                row[f"ML_{side}"] = o["price"]
+            elif market["key"] == "spreads":
+                row[f"SPREAD_{side}_PRICE"] = o["price"]
+                if side == "HOME":
+                    row["SPREAD_HOME"] = o["point"]
+            elif market["key"] == "totals":
+                row["TOTAL"] = o["point"]
+                row[o["name"].upper()] = o["price"]
+    return row
+
+
+def get_game_lines(sport=NBA, hours=24):
+    """Return (DataFrame of moneyline/spread/total per game, requests_remaining).
+
+    One call covers every game, but it costs 1 request per market (3 here). Cached for the day.
+    """
+    cache_key = f"odds_{sport}_lines_{BOOKMAKER}"
+    cached = cache.get(cache_key)
+    if cached is None:
+        events, remaining = _get(
+            f"/sports/{sport}/odds",
+            {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
+        )
+        rows = [parse_game_lines(e) for e in events if _starts_soon(e, hours)]
+        cached = {"rows": [r for r in rows if r], "remaining": remaining}
+        cache.put(cache_key, cached)
+
+    df = pd.DataFrame(cached["rows"], columns=LINE_COLUMNS)
+    return df.sort_values("START").reset_index(drop=True), cached["remaining"]

@@ -45,3 +45,39 @@ def test_rate_and_props_table():
     scan = pd.DataFrame({"PLAYER": ["A"], "GAME": ["x"], "LINE": [20.5], "VALUES": [pts]})
     row = analysis.props_table(scan).iloc[0]
     assert (row["L5"], row["L10"], row["L20"]) == (60.0, 60.0, 60.0)
+
+
+def lines_df():
+    return pd.DataFrame([{"GAME": "Away @ Home", "HOME": "Home", "AWAY": "Away", "ML_HOME": -200,
+                          "ML_AWAY": 170, "SPREAD_HOME": -4.5, "TOTAL": 45.5}])
+
+
+def test_win_cover_over_rates():
+    games = [{"for": 30, "against": 20}, {"for": 24, "against": 20}, {"for": 10, "against": 14},
+             {"for": 20, "against": 20}]
+    assert analysis.win_rate(games, 4) == 50.0
+    # Margins are +10, +4, -4, 0. Favored by 4.5 -> only the +10 win covers. Pushes don't count.
+    assert analysis.cover_rate(games, -4.5, 4) == 25.0
+    assert analysis.cover_rate(games, -4.0, 4) == 25.0  # the +4 game pushes
+    assert analysis.cover_rate(games, 4.5, 4) == 100.0  # as a 4.5-point underdog even the -4 loss covers
+    assert analysis.over_rate(games, 45.5, 4) == 25.0  # totals: 50, 44, 24, 40
+    assert analysis.win_rate([], 5) is None
+
+
+def test_sides_and_totals_tables():
+    form = {"Home": [{"for": 30, "against": 20}] * 10, "Away": [{"for": 10, "against": 20}] * 10}
+    sides = analysis.sides_table(lines_df(), form).set_index("TEAM")
+    assert sides.loc["Home", "SPREAD"] == -4.5 and sides.loc["Away", "SPREAD"] == 4.5
+    assert sides.loc["Home", "COVER_L10"] == 100.0  # +10 margin beats -4.5
+    assert sides.loc["Away", "COVER_L10"] == 0.0    # -10 margin loses even with +4.5
+    assert sides.loc["Home", "WIN_L5"] == 100.0
+    totals = analysis.totals_table(lines_df(), form).iloc[0]
+    assert totals["HOME_OVER_L10"] == 100.0 and totals["AWAY_OVER_L10"] == 0.0  # 50 vs 30
+    assert totals["AVG_COMBINED"] == 40.0
+
+
+def test_tables_cope_with_missing_data():
+    lines = lines_df().assign(SPREAD_HOME=float("nan"), TOTAL=float("nan"))
+    sides = analysis.sides_table(lines, {})
+    assert sides["COVER_L10"].isna().all() and sides["WIN_L10"].isna().all()
+    assert analysis.totals_table(lines, {}).iloc[0]["AVG_COMBINED"] is None

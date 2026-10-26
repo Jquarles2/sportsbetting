@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src import analysis, odds, picks, stats_nba, stats_nfl
+from src import analysis, games, odds, picks, stats_nba, stats_nfl
 
 st.set_page_config(page_title="Props Research", page_icon="🏀")
 
@@ -82,6 +82,59 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label):
     return props
 
 
+def game_lines_section(key, load_lines, get_team_games, pause):
+    """Moneylines, spreads and totals for the loaded games, plus each team's recent form.
+
+    Form means: how often the team's last games would have won, covered today's spread, or gone
+    over today's total. It's the same idea as the prop hit rates, using final scores only.
+    """
+    if st.button("Load game lines", key=f"{key}_lines_load"):
+        try:
+            st.session_state[f"{key}_lines"] = load_lines()
+        except Exception as e:
+            st.error(f"Couldn't load game lines right now: {e}")
+
+    if f"{key}_lines" not in st.session_state:
+        return
+    lines, remaining = st.session_state[f"{key}_lines"]
+    if lines.empty:
+        st.info("No FanDuel game lines posted yet.")
+        return
+    st.dataframe(
+        lines[["GAME", "ML_AWAY", "ML_HOME", "SPREAD_HOME", "SPREAD_HOME_PRICE", "TOTAL", "OVER", "UNDER"]],
+        hide_index=True,
+    )
+    st.caption("SPREAD_HOME is the home team's number (-3.5 = home favored by 3.5). "
+               f"Odds API requests remaining this month: {remaining}")
+
+    if st.button("Scan teams", key=f"{key}_teams_btn"):
+        bar = st.progress(0.0, text="Scanning teams...")
+        st.session_state[f"{key}_form"] = games.scan_teams(
+            lines, get_team_games, pause=pause,
+            progress=lambda done, total: bar.progress(done / total, text=f"{done}/{total} teams"),
+        )
+        bar.empty()
+
+    if f"{key}_form" in st.session_state:
+        form, errors = st.session_state[f"{key}_form"]
+        if errors:
+            st.warning(f"{len(errors)} teams couldn't be loaded, e.g. {errors[0]}")
+        st.caption("COVER = % of the team's recent games it would have covered today's spread. "
+                   "OVER = % that went over today's total. Past results are context, not a prediction.")
+
+        st.markdown("**Sides (moneyline and spread)**")
+        window = st.selectbox("Window", ["L5", "L10"], index=1, key=f"{key}_side_win")
+        min_cover = st.slider("Minimum cover rate (%)", 0, 100, 60, step=10, key=f"{key}_min_cover")
+        sides = analysis.sides_table(lines, form)
+        sides = sides[sides[f"COVER_{window}"].fillna(0) >= min_cover]
+        sides = sides.sort_values(f"COVER_{window}", ascending=False).reset_index(drop=True)
+        st.dataframe(sides, hide_index=True)
+
+        st.markdown("**Totals**")
+        totals = analysis.totals_table(lines, form)
+        st.dataframe(totals, hide_index=True)
+
+
 nba_tab, nfl_tab = st.tabs(["🏀 NBA", "🏈 NFL"])
 
 with nba_tab:
@@ -130,6 +183,15 @@ with nba_tab:
                 else:
                     st.dataframe(analysis.hit_rates(logs, line), hide_index=True)
 
+    st.header("NBA moneylines, spreads and totals")
+    st.caption("Loading costs about 3 Odds API requests for every game at once, cached for the day.")
+    game_lines_section(
+        "nba",
+        load_lines=lambda: odds.get_game_lines(odds.NBA, hours=24),
+        get_team_games=stats_nba.get_team_games,
+        pause=1.0,  # balldontlie is rate limited
+    )
+
 with nfl_tab:
     st.header("This week's NFL props")
     market = st.selectbox(
@@ -145,4 +207,13 @@ with nfl_tab:
         get_values=lambda player: stats_nfl.get_recent_values(player, market),
         stat_label=stat_label,
         load_label=f"Load this week's {stat_label} props",
+    )
+
+    st.header("NFL moneylines, spreads and totals")
+    st.caption("Loading costs about 3 Odds API requests for every game this week at once, cached for the day.")
+    game_lines_section(
+        "nfl",
+        load_lines=lambda: odds.get_game_lines(odds.NFL, hours=24 * 7),
+        get_team_games=stats_nfl.get_team_games,
+        pause=0,  # results come from one downloaded file
     )
