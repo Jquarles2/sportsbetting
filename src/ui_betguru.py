@@ -45,15 +45,19 @@ def show_parlay(code, risk, parlay):
     a, b, c = st.columns(3)
     a.metric("Chance every leg hits", f"{parlay['p_all']:.0%}")
     b.metric("Pays (American odds)", f"{parlay['american']:+d}")
-    c.metric("Expected value per $100", f"{parlay['ev_per_100']:+.0f}")
+    c.metric("Expected value per $100 (fair odds)", f"{parlay['ev_per_100']:+.0f}")
     for leg in legs.itertuples():
         st.markdown(f"**{leg.PICK}** ({leg.PRICE:+.0f}, {leg.P:.0%}) - {leg.GAME}")
         st.caption(leg.WHY)
         for flag in leg.FLAGS:
             st.caption(f"⚠️ {flag['reason']}")
-    st.caption("Expected value uses the model's own chances and the real prices. It is usually negative "
-               "because the sportsbook takes a cut on every leg, and it multiplies with each added leg. "
-               "BetGuru can't promise a winner; it avoids legs it doesn't trust and shows you the real math.")
+    st.caption("Expected value is what you should expect on average if BetGuru has no edge: the book's own "
+               "fair chances against the real prices. It is always negative, because the sportsbook takes a "
+               "cut on every leg and the cut multiplies with each added leg.")
+    st.caption(f"If you trusted the model's chances instead, the number would be {parlay['ev_model_per_100']:+.0f}. "
+               "Don't: that figure comes from where the model disagrees with the book, and backtests found those "
+               "disagreements aren't real edge. BetGuru can't promise a winner; it avoids legs it doesn't "
+               "trust and shows you the real math.")
     if st.button("Save this parlay to my record", key=f"bg_{code}_save"):
         results.log_parlay(code, risk, legs)
         st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
@@ -144,8 +148,9 @@ def show_model(code):
             st.json({k: round(v, 3) for k, v in info["params"].items()})
     else:
         st.warning("The NBA model hasn't been trained: there are no free historical NBA lines to test it on. "
-                   "It uses conservative settings that stay close to the market until its own saved "
-                   "results (below) give it something to learn from.")
+                   "Until its own saved results (below) give it something to learn from, its chances are "
+                   "exactly the book's, so the parlay is about avoiding flagged legs and finding the best "
+                   "prices, not about beating the market.")
 
     st.subheader("Record")
     st.caption("Every parlay you save is graded against the final scores. The calibration table shows "

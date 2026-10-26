@@ -109,7 +109,11 @@ def test_parlay_takes_one_leg_per_game_and_multiplies_probabilities():
     for price in legs["PRICE"]:
         decimal *= ratings.american_to_decimal(price)
     assert out["decimal"] == pytest.approx(decimal)
-    assert out["ev_per_100"] == pytest.approx(out["p_all"] * (decimal - 1) * 100 - (1 - out["p_all"]) * 100)
+    # The headline EV uses the book's own no-vig chances; the model-based one is kept separately.
+    pm = legs["P_MARKET"].prod()
+    assert out["ev_per_100"] == pytest.approx(pm * (decimal - 1) * 100 - (1 - pm) * 100)
+    assert out["ev_model_per_100"] == pytest.approx(
+        out["p_all"] * (decimal - 1) * 100 - (1 - out["p_all"]) * 100)
     assert out["message"] == ""
 
 
@@ -165,3 +169,28 @@ def test_nfl_team_injuries_and_player_team(monkeypatch):
     got = stats_nfl.get_team_injuries("Kansas City Chiefs")
     assert [(p["name"], p["status"]) for p in got] == [("Wide Out", "Out"), ("Sam Qb", "Questionable")]
     assert stats_nfl.get_team_injuries("Nowhere") == []
+
+
+def test_headline_ev_can_never_show_profit_even_when_the_model_disagrees_wildly():
+    # A model that is certain about everything (huge tilts) still can't make the headline EV positive,
+    # because that number is built from the book's own chances.
+    wild = {**P, "k_spread": 5.0, "k_total": 5.0, "k_ml": 5.0}
+    lines = lines_df(("Hawks", "Owls", {}), ("Bears", "Lions", {}), ("Hawks", "Lions", {}))
+    legs = guru.apply_user_list(guru.build_legs(lines, FORM, wild, {}, "nfl"), [])
+    for risk in guru.PROFILES:
+        out = guru.build_parlay(legs, risk, 2)
+        if out["p_all"] is not None:
+            assert out["ev_per_100"] <= 0
+    aggressive = guru.build_parlay(legs, "Aggressive", 2)
+    assert aggressive["ev_model_per_100"] > 0  # the model "sees" profit; the headline refuses to
+
+
+def test_untrained_nba_model_has_no_tilt_so_it_matches_the_market():
+    nba = ratings.load_params("nba")
+    assert nba["k_spread"] == nba["k_total"] == nba["k_ml"] == 0.0
+    lines = lines_df(("Hawks", "Owls", {"ML_HOME": -140, "ML_AWAY": 120, "SPREAD_HOME_PRICE": -120,
+                                         "SPREAD_AWAY_PRICE": 100}))
+    legs = guru.build_legs(lines, FORM, nba, {}, "nba")
+    assert (legs["P"] - legs["P_MARKET"]).abs().max() < 1e-9
+    spread = legs[legs["MARKET"] == "Spread"].set_index("TEAM")
+    assert spread.loc["Hawks", "P"] == pytest.approx(0.5217, abs=1e-3)  # -120 implies 54.5% and +100 implies 50%; without the vig it's 52.2%, not a flat 50%

@@ -26,13 +26,14 @@ WINDOWS = (5, 10, 20)
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # Starting settings, used when a sport hasn't been trained (the NBA has no free historical lines).
-# The NBA tilts are deliberately small: NFL backtests found no edge over the market, so until the
-# NBA model has live results of its own it should stay close to what the book says.
+# The NBA tilts are zero: NFL backtests found no edge over the market, and an early version with small
+# non-zero NBA tilts produced fake "+EV" parlays by picking the model's biggest disagreements with the
+# book (the winner's curse). Until the NBA has live results, its probabilities are the market's own.
 DEFAULTS = {
     "nfl": {"w5": 0.3, "w10": 0.4, "w20": 0.3, "home_adv": 2.0, "shrink": 0.8,
             "k_spread": 0.12, "k_total": 0.08, "k_ml": 0.12},
     "nba": {"w5": 0.3, "w10": 0.4, "w20": 0.3, "home_adv": 2.5, "shrink": 0.8,
-            "k_spread": 0.02, "k_total": 0.015, "k_ml": 0.02},
+            "k_spread": 0.0, "k_total": 0.0, "k_ml": 0.0},
 }
 # The ranges the optimizer searches.
 # A k of 0 means "ignore our model and trust the market", so the search is allowed to pick it.
@@ -74,13 +75,18 @@ def expected_total(totals_home, totals_away, params):
     return (_mix(totals_home, params) + _mix(totals_away, params)) / 2
 
 
-def p_home_cover(exp_margin, spread_home, params):
-    """Chance the home team covers. spread_home is the home team's number: -3.5 = favored by 3.5."""
-    return sigmoid(params["k_spread"] * (exp_margin + spread_home))
+def p_home_cover(exp_margin, spread_home, params, base=0.5):
+    """Chance the home team covers. spread_home is the home team's number: -3.5 = favored by 3.5.
+
+    base is the market's own chance of the home side covering once the vig is removed (0.5 when
+    the two prices are equal). With k_spread = 0 the answer is exactly the market's.
+    """
+    return sigmoid(logit(base) + params["k_spread"] * (exp_margin + spread_home))
 
 
-def p_over(exp_total, total_line, params):
-    return sigmoid(params["k_total"] * (exp_total - total_line))
+def p_over(exp_total, total_line, params, base=0.5):
+    """Chance of the over; base is the market's no-vig chance of the over."""
+    return sigmoid(logit(base) + params["k_total"] * (exp_total - total_line))
 
 
 def logit(p):
@@ -130,6 +136,15 @@ def american_to_prob(price):
     """The probability a bet at American odds implies (-110 -> 0.524, +150 -> 0.4)."""
     price = float(price)
     return -price / (-price + 100) if price < 0 else 100 / (price + 100)
+
+
+def devig(price_a, price_b):
+    """Both sides' chances with the sportsbook's cut removed: (a, b), adding up to 1.
+
+    -110 / -110 gives (0.5, 0.5). Two prices always imply more than 100% in total; the extra is the vig.
+    """
+    a, b = american_to_prob(price_a), american_to_prob(price_b)
+    return a / (a + b), b / (a + b)
 
 
 def american_to_decimal(price):

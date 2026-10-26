@@ -27,8 +27,8 @@ PROFILES = {
     "Aggressive": {"min_p": 0.40, "allow": ("warn",), "rank": "edge",
                    "blurb": "Underdogs allowed. Ranked by value versus the price, so bigger payouts and bigger misses."},
 }
-LEG_COLUMNS = ["GAME", "START", "MARKET", "PICK", "TEAM", "LINE", "PRICE", "P", "IMPLIED", "EDGE",
-               "WHY", "FLAGS", "SEVERITY"]
+LEG_COLUMNS = ["GAME", "START", "MARKET", "PICK", "TEAM", "LINE", "PRICE", "P", "P_MARKET", "IMPLIED",
+               "EDGE", "WHY", "FLAGS", "SEVERITY"]
 NO_BET_COLUMNS = ["WHO", "TEAM", "STATUS", "WHY", "SEVERITY", "SOURCE"]
 
 
@@ -74,9 +74,11 @@ def team_flags(teams, get_injuries):
 
 # --- Legs ---
 
-def _leg(game, market, pick, team, line, price, p, why, flags):
+def _leg(game, market, pick, team, line, price, p, p_market, why, flags):
+    """One candidate leg. P is the model's chance; P_MARKET is the book's own chance with the vig removed."""
     return {"GAME": game.GAME, "START": game.START, "MARKET": market, "PICK": pick, "TEAM": team,
-            "LINE": line, "PRICE": price, "P": float(p), "IMPLIED": ratings.american_to_prob(price),
+            "LINE": line, "PRICE": price, "P": float(p), "P_MARKET": float(p_market),
+            "IMPLIED": ratings.american_to_prob(price),
             "EDGE": float(p) - ratings.american_to_prob(price), "WHY": why, "FLAGS": flags,
             "SEVERITY": worst(flags)}
 
@@ -107,26 +109,28 @@ def build_legs(lines, form, params, flags, sport):
         margin_txt = f"Model margin: {g.HOME} by {em:+.1f}" if em >= 0 else f"Model margin: {g.AWAY} by {-em:.1f}"
 
         if _isnum(g.ML_HOME) and _isnum(g.ML_AWAY):
-            rows.append(_leg(g, "Moneyline", f"{g.HOME} to win", g.HOME, None, g.ML_HOME, p_home,
+            rows.append(_leg(g, "Moneyline", f"{g.HOME} to win", g.HOME, None, g.ML_HOME, p_home, market_p,
                              f"{margin_txt}. Win chance {p_home:.0%} (market {market_p:.0%}).", flags_home))
-            rows.append(_leg(g, "Moneyline", f"{g.AWAY} to win", g.AWAY, None, g.ML_AWAY, 1 - p_home,
+            rows.append(_leg(g, "Moneyline", f"{g.AWAY} to win", g.AWAY, None, g.ML_AWAY, 1 - p_home, 1 - market_p,
                              f"{margin_txt}. Win chance {1 - p_home:.0%} (market {1 - market_p:.0%}).", flags_away))
 
         if has_spread and _isnum(g.SPREAD_HOME_PRICE) and _isnum(g.SPREAD_AWAY_PRICE):
-            p_cover = float(ratings.p_home_cover(em, spread_home, params))
+            base_home, base_away = ratings.devig(g.SPREAD_HOME_PRICE, g.SPREAD_AWAY_PRICE)
+            p_cover = float(ratings.p_home_cover(em, spread_home, params, base=base_home))
             blowout = ([{"reason": f"Spread of {abs(spread_home):g} is a blowout line", "severity": "block"}]
                        if abs(spread_home) >= BLOWOUT[sport] else [])
             why = f"{margin_txt} against a line of {g.HOME} {spread_home:+g}."
             rows.append(_leg(g, "Spread", f"{g.HOME} {spread_home:+g}", g.HOME, spread_home,
-                             g.SPREAD_HOME_PRICE, p_cover, why, flags_home + blowout))
+                             g.SPREAD_HOME_PRICE, p_cover, base_home, why, flags_home + blowout))
             rows.append(_leg(g, "Spread", f"{g.AWAY} {-spread_home:+g}", g.AWAY, -spread_home,
-                             g.SPREAD_AWAY_PRICE, 1 - p_cover, why, flags_away + blowout))
+                             g.SPREAD_AWAY_PRICE, 1 - p_cover, base_away, why, flags_away + blowout))
 
         if _isnum(g.TOTAL) and _isnum(g.OVER) and _isnum(g.UNDER):
-            p_o = float(ratings.p_over(et, g.TOTAL, params))
+            base_over, base_under = ratings.devig(g.OVER, g.UNDER)
+            p_o = float(ratings.p_over(et, g.TOTAL, params, base=base_over))
             why = f"Model total: {et:.1f} points against a line of {g.TOTAL:g}."
-            rows.append(_leg(g, "Total", f"Over {g.TOTAL:g}", None, g.TOTAL, g.OVER, p_o, why, both))
-            rows.append(_leg(g, "Total", f"Under {g.TOTAL:g}", None, g.TOTAL, g.UNDER, 1 - p_o, why, both))
+            rows.append(_leg(g, "Total", f"Over {g.TOTAL:g}", None, g.TOTAL, g.OVER, p_o, base_over, why, both))
+            rows.append(_leg(g, "Total", f"Under {g.TOTAL:g}", None, g.TOTAL, g.UNDER, 1 - p_o, base_under, why, both))
     return pd.DataFrame(rows, columns=LEG_COLUMNS)
 
 
@@ -203,9 +207,13 @@ def _rank(legs, how):
 def build_parlay(legs, risk, n_legs):
     """Pick the best parlay for a risk level: at most one leg per game, never a blocked leg.
 
-    Returns a dict with 'legs' (DataFrame), 'p_all' (chance every leg hits, assuming independent
-    games), 'decimal' and 'american' (the payout odds), 'ev_per_100' (expected profit on a $100
-    stake using the model's chances), and 'message' (set when there weren't enough legs).
+    Returns a dict with 'legs' (DataFrame), 'p_all' (the model's chance every leg hits, assuming
+    independent games), 'decimal' and 'american' (the payout odds), and 'message' (set when there
+    weren't enough legs). Two expected values per $100 staked:
+    - 'ev_per_100' uses the book's own no-vig chances. It answers "what should I expect if BetGuru
+      has no edge?", and it is the honest headline: it is never positive, only the vig compounding.
+    - 'ev_model_per_100' uses the model's chances. Treat it with suspicion: ranking by disagreement
+      with the book picks the model's biggest errors (the winner's curse), and backtests found no edge.
     """
     profile = PROFILES[risk]
     eligible = legs.copy()
@@ -225,11 +233,14 @@ def build_parlay(legs, risk, n_legs):
     picked = pd.DataFrame(chosen).drop(columns=["Index", "SCORE"], errors="ignore")
     if len(picked) < 2:
         return {"legs": picked, "p_all": None, "decimal": None, "american": None, "ev_per_100": None,
+                "ev_model_per_100": None,
                 "message": f"Not enough legs meet the {risk} rules today (found {len(picked)})."}
     p_all = float(picked["P"].prod())
+    p_market = float(picked["P_MARKET"].prod())
     decimal = float(np.prod([ratings.american_to_decimal(x) for x in picked["PRICE"]]))
     return {"legs": picked, "p_all": p_all, "decimal": decimal,
             "american": ratings.decimal_to_american(decimal),
-            "ev_per_100": p_all * (decimal - 1) * 100 - (1 - p_all) * 100,
+            "ev_per_100": p_market * (decimal - 1) * 100 - (1 - p_market) * 100,
+            "ev_model_per_100": p_all * (decimal - 1) * 100 - (1 - p_all) * 100,
             "message": (f"Only {len(picked)} legs qualified, fewer than the {n_legs} you asked for."
                         if len(picked) < n_legs else "")}

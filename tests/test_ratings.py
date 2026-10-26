@@ -73,3 +73,12 @@ def test_load_params_uses_defaults_without_a_trained_file(tmp_path, monkeypatch)
     (tmp_path / "model_nba.json").write_text('{"params": {"home_adv": 3.3}, "metrics": {}}')
     assert ratings.load_params("nba")["home_adv"] == 3.3 and ratings.load_params("nba")["w5"] == 0.3
     assert ratings.load_model_info("nba")["metrics"] == {}
+
+
+def test_base_probability_is_the_starting_point_and_devig_adds_to_one():
+    em = np.array([0.0])
+    assert ratings.p_home_cover(em, 0.0, {**P, "k_spread": 0.0}, base=0.55)[0] == pytest.approx(0.55)
+    assert ratings.p_over(np.array([40.0]), 40.0, {**P, "k_total": 0.0}, base=0.48)[0] == pytest.approx(0.48)
+    assert ratings.devig(-110, -110) == pytest.approx((0.5, 0.5))
+    a, b = ratings.devig(-120, 100)
+    assert a + b == pytest.approx(1.0) and a > b

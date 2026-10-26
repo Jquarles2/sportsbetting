@@ -61,7 +61,7 @@ def test_nfl_slate_builds_a_parlay_and_flags_the_injured_qb():
     at = run()
     click(at, "Build today's NFL slate")
     assert not at.exception
-    assert [m.label for m in at.metric] == ["Chance every leg hits", "Pays (American odds)", "Expected value per $100"]
+    assert [m.label for m in at.metric] == ["Chance every leg hits", "Pays (American odds)", "Expected value per $100 (fair odds)"]
     tables = [d.value for d in at.dataframe]
     nobets = next(t for t in tables if "SOURCE" in t.columns)
     assert nobets.iloc[0]["WHO"] == "Sam Qb (QB)" and nobets.iloc[0]["SEVERITY"] == "block"
