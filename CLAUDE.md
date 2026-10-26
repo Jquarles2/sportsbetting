@@ -79,6 +79,9 @@ labelled "don't trust this" number. Never switch the headline back to model chan
 - `src/guru.py`: legs (game legs, plus prop legs from `build_prop_legs`), flags, no-bet list, parlay builder
   (Safe / Balanced / Aggressive). Prop legs: MARKET `Prop:<odds market>`, priced at the book's no-vig odds
   (never a model edge), filtered by recent hit rate (`SUPPORT`, `PROFILES[...]["prop_support"]`).
+- Parlays combine every built slate by default ("Combine with my other built slates"): legs carry a `SPORT`
+  column, and a cross-sport parlay is logged with risk `"<risk> (mixed)"` so the record counts it as one ticket
+  (same for `Lotto`). A slate with fewer than two games can't make a parlay or a lotto ticket.
 - `src/lotto.py`: the lotto ticket (long shot for a small stake; best price per risk, one leg per game,
   trims unneeded legs; mixes sports and props; the headline numbers are the book's fair odds).
 - `src/talks.py`, `src/writeups.py`, `src/claude.py`: Claude-written game talks and pick write-ups.

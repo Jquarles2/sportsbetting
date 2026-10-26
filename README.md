@@ -10,6 +10,8 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 - **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive) and a leg count. One leg per
   game, never a leg it doesn't trust, and the expected value at fair odds shown (always negative: the
   sportsbook takes a cut on every leg, and the cut multiplies with each leg).
+- **Combine slates**: build both the NFL and NBA slates and the parlay mixes them, so a one-game Monday night
+  still makes a parlay. A parlay that spans sports is saved and graded as one ticket.
 - **Player props as legs**: props you've already loaded and scanned in the props tabs can join the parlay,
   for today's games only and at no extra Odds API cost. They are priced at the book's fair odds (no invented
   edge), must also have been consistent lately (80% / 70% / 60% of the last 10 games for Safe / Balanced /

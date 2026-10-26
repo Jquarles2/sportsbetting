@@ -49,6 +49,11 @@ def run():
     return AppTest.from_file(APP, default_timeout=60).run()
 
 
+def has_parlay(at):
+    """True if the page is showing a parlay (the lotto has similar metrics, so look for the parlay's own)."""
+    return any(m.label.startswith("Expected value per $100") for m in at.metric)
+
+
 def click(at, label):
     next(b for b in at.button if b.label.startswith(label)).click().run()
 
@@ -211,3 +216,41 @@ def test_page_warns_when_injury_status_could_not_be_checked(monkeypatch):
     click(at, "Build today's NFL slate")
     assert not at.exception
     assert any("Couldn't check injury status for 6 prop players" in w.value for w in at.warning)
+
+
+def test_a_one_game_slate_explains_why_there_is_no_parlay(monkeypatch):
+    monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES.head(1), "397"))
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert not at.exception and not has_parlay(at)
+    assert any("Only 1 game to pick from" in i.value and "Combine with my other built slates" in i.value for i in at.info)
+
+
+def test_a_parlay_can_mix_sports_and_is_saved_as_one_mixed_ticket(monkeypatch):
+    monkeypatch.setattr(odds, "get_game_lines",
+                        lambda sport, hours: ((NBA_LINES if sport == odds.NBA else LINES.head(1)), "397"))
+    at = run()
+    click(at, "Build today's NFL slate")                       # Monday night: a single game
+    at.radio(key="bg_sport").set_value("NBA").run()
+    click(at, "Build today's NBA slate")
+    at.radio(key="bg_sport").set_value("NFL").run()
+    at.select_slider(key="bg_risk").set_value("Aggressive").run()
+    at.slider(key="bg_legs").set_value(4).run()
+    assert not at.exception and has_parlay(at)                  # one NFL game plus three NBA games: a 4-leg parlay
+    assert any("Parlay legs come from: NBA, NFL" in c.value for c in at.caption)
+    click(at, "Save this parlay")
+    logged = results._legs()
+    assert set(logged["sport"]) == {"nfl", "nba"} and set(logged["risk"]) == {"Aggressive (mixed)"}
+    assert results.parlay_record() == {"won": 0, "lost": 0, "pending": 1}
+
+
+def test_combining_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(odds, "get_game_lines",
+                        lambda sport, hours: ((NBA_LINES if sport == odds.NBA else LINES.head(1)), "397"))
+    at = run()
+    click(at, "Build today's NFL slate")
+    at.radio(key="bg_sport").set_value("NBA").run()
+    click(at, "Build today's NBA slate")
+    at.radio(key="bg_sport").set_value("NFL").run()
+    at.checkbox(key="bg_combine").set_value(False).run()
+    assert not at.exception and not has_parlay(at)              # alone, the one NFL game can't make a 3-leg parlay

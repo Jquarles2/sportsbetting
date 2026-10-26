@@ -65,6 +65,11 @@ def test_flagged_excluded_and_inconsistent_legs_are_never_used():
     assert ticket["message"] == "" and len(ticket["legs"]) == 12
 
 
+def test_one_game_cannot_make_a_ticket():
+    ticket = lotto.build_lotto(slate(1), stake=0.50, target_profit=1000)
+    assert ticket["p_all"] is None and "at least two different games" in ticket["message"]
+
+
 def test_no_legs_at_all():
     ticket = lotto.build_lotto(slate(0), stake=0.50, target_profit=1000)
     assert ticket["p_all"] is None and "No legs" in ticket["message"]

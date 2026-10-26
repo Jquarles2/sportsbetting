@@ -43,6 +43,10 @@ def build_lotto(legs, stake=0.50, target_profit=1000.0):
 
     best_per_game = [max(group.itertuples(), key=_efficiency) for _, group in eligible.groupby("GAME")]
     best_per_game.sort(key=_efficiency, reverse=True)
+    if len(best_per_game) < 2:
+        return {"legs": eligible.iloc[0:0], "decimal": None, "american": None, "profit": None, "p_all": None,
+                "one_in": None, "ev": None,
+                "message": "A lotto ticket needs at least two different games. Build the other sport's slate to add more."}
 
     chosen, decimal = [], 1.0
     for leg in best_per_game:

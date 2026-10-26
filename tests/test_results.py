@@ -245,3 +245,15 @@ def test_a_failed_injury_request_is_not_retried_for_a_few_minutes(monkeypatch):
     monkeypatch.setattr(stats_nba, "_injuries_failed_at", stats_nba.time.monotonic() - 301)  # five minutes later
     monkeypatch.setattr(stats_nba, "_get", lambda path, params: {"data": [], "meta": {}})
     assert stats_nba.get_injury("Jayson Tatum") is None  # it tries again and now works
+
+
+def test_a_mixed_sport_parlay_counts_as_one_ticket():
+    legs = pd.DataFrame([leg("Moneyline", "Hawks to win", "Hawks", None, p=0.6, game="Owls @ Hawks") + ("nfl",),
+                         leg("Moneyline", "Celtics to win", "Celtics", None, p=0.6, game="Knicks @ Celtics") + ("nba",)],
+                        columns=["GAME", "START", "MARKET", "PICK", "TEAM", "LINE", "PRICE", "P", "SPORT"])
+    results.log_parlay("nfl", "Balanced (mixed)", legs)   # the sport argument is only a fallback; each leg has its own
+    assert set(results._legs()["sport"]) == {"nfl", "nba"}
+    assert results.parlay_record() == {"won": 0, "lost": 0, "pending": 1}
+    scores = {("Hawks", "Owls"): (27, 20), ("Celtics", "Knicks"): (90, 100)}
+    results.grade_pending(lambda sport, home, away, start: scores[(home, away)], now=LATER)
+    assert results.parlay_record() == {"won": 0, "lost": 1, "pending": 0}   # one leg lost, so the one ticket lost
