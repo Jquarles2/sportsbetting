@@ -207,27 +207,48 @@ def get_team_games(team_name, n=20):
     return [{"for": g["for"], "against": g["against"]} for g in games[:n]]
 
 
+_injuries_failed_at = None
+INJURY_RETRY_SECONDS = 300  # after a failed call, don't try again for 5 minutes
+
+
 def _injuries():
-    """Everyone on balldontlie's injury list as {'name', 'status', 'detail'} dicts, cached for the day."""
+    """Everyone on balldontlie's injury list as {'name', 'status', 'detail'} dicts, cached for the day.
+
+    If the call fails (say the plan doesn't include injuries), later calls fail instantly for a few minutes
+    instead of each waiting for another doomed request.
+    """
+    global _injuries_failed_at
     rows = cache.get("bdl_injuries")
+    if rows is None and _injuries_failed_at and time.monotonic() - _injuries_failed_at < INJURY_RETRY_SECONDS:
+        raise RuntimeError("balldontlie injuries unavailable (a recent request failed)")
     if rows is None:
-        rows, cursor = [], None
-        for _ in range(5):
-            params = {"per_page": 100}
-            if cursor:
-                params["cursor"] = cursor
-            data = _get("/player_injuries", params)
-            for item in data["data"]:
-                player = item.get("player") or {}
-                rows.append({
-                    "name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
-                    "status": item.get("status"),
-                    "detail": item.get("description") or item.get("comment"),
-                })
-            cursor = data.get("meta", {}).get("next_cursor")
-            if not cursor:
-                break
+        try:
+            rows = _fetch_injuries()
+        except Exception:
+            _injuries_failed_at = time.monotonic()
+            raise
         cache.put("bdl_injuries", rows)
+    return rows
+
+
+def _fetch_injuries():
+    """Ask balldontlie for the injury list (follows its pages) as {'name', 'status', 'detail'} dicts."""
+    rows, cursor = [], None
+    for _ in range(5):
+        params = {"per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/player_injuries", params)
+        for item in data["data"]:
+            player = item.get("player") or {}
+            rows.append({
+                "name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
+                "status": item.get("status"),
+                "detail": item.get("description") or item.get("comment"),
+            })
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
     return rows
 
 

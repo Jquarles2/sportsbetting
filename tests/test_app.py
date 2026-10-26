@@ -20,9 +20,12 @@ def row(home, away, ml_h, ml_a, spread, total):
 LINES = pd.DataFrame([row("Hawks", "Owls", -250, 210, -6.5, 44.5),
                       row("Bears", "Lions", -150, 130, -3.0, 47.5),
                       row("Cubs", "Reds", -200, 170, -4.5, 41.5)], columns=odds.LINE_COLUMNS)
+NBA_LINES = pd.DataFrame([row("Suns", "Jazz", -300, 250, -8.5, 224.5), row("Nets", "Heat", 120, -140, 2.5, 219.5),
+                          row("Kings", "Magic", -180, 155, -4.0, 228.5)], columns=odds.LINE_COLUMNS)
 STRONG = [{"for": 30, "against": 17}] * 12
 WEAK = [{"for": 17, "against": 30}] * 12
-FORM = {"Hawks": STRONG, "Owls": WEAK, "Bears": STRONG, "Lions": WEAK, "Cubs": STRONG, "Reds": WEAK}
+FORM = {"Hawks": STRONG, "Owls": WEAK, "Bears": STRONG, "Lions": WEAK, "Cubs": STRONG, "Reds": WEAK,
+        "Suns": STRONG, "Jazz": WEAK, "Nets": STRONG, "Heat": WEAK, "Kings": STRONG, "Magic": WEAK}
 
 
 @pytest.fixture(autouse=True)
@@ -30,8 +33,8 @@ def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "s.db")
     monkeypatch.setattr(odds, "requests_remaining", lambda: 400)
-    monkeypatch.setattr(odds, "count_games", lambda sport, hours: 3)
-    monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES, "397"))
+    monkeypatch.setattr(odds, "event_ids", lambda sport, hours: ["a", "b", "c"])
+    monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (NBA_LINES if sport == odds.NBA else LINES, "397"))
     monkeypatch.setattr(claude, "ask", lambda system, prompt, client=None, max_tokens=500: "A short talk.")
     for cfg in ui_betguru.SPORTS.values():
         monkeypatch.setitem(cfg, "team_games", lambda team: FORM.get(team))
@@ -61,7 +64,7 @@ def test_nfl_slate_builds_a_parlay_and_flags_the_injured_qb():
     at = run()
     click(at, "Build today's NFL slate")
     assert not at.exception
-    assert [m.label for m in at.metric] == ["Chance every leg hits", "Pays (American odds)", "Expected value per $100 (fair odds)"]
+    assert [m.label for m in at.metric][:3] == ["Chance every leg hits", "Pays (American odds)", "Expected value per $100 (fair odds)"]
     tables = [d.value for d in at.dataframe]
     nobets = next(t for t in tables if "SOURCE" in t.columns)
     assert nobets.iloc[0]["WHO"] == "Sam Qb (QB)" and nobets.iloc[0]["SEVERITY"] == "block"
@@ -177,3 +180,34 @@ def test_without_loaded_props_the_tab_says_how_to_add_them():
     at = run()
     click(at, "Build today's NFL slate")
     assert any("No props loaded for today's games" in c.value for c in at.caption)
+
+
+def test_lotto_combines_both_slates_and_is_saved_as_one_ticket_with_each_legs_sport():
+    at = run()
+    click(at, "Build today's NFL slate")
+    at.radio(key="bg_sport").set_value("NBA").run()
+    click(at, "Build today's NBA slate")
+    assert not at.exception
+    assert any(sh.value.startswith("Pay $0.50 to win $") for sh in at.subheader)
+    assert any("can't reach $1,000" in i.value for i in at.info)   # six games can't pay 2,000 to 1: it says so
+    click(at, "Save this ticket")
+    logged = results._legs()
+    assert set(logged["risk"]) == {"Lotto"} and set(logged["sport"]) == {"nfl", "nba"}
+    assert results.parlay_record() == {"won": 0, "lost": 0, "pending": 1}  # one ticket, not one per sport
+
+
+
+def test_page_warns_when_injury_status_could_not_be_checked(monkeypatch):
+    def dead(name):
+        raise RuntimeError("injury feed down")
+    monkeypatch.setitem(ui_betguru.SPORTS["NFL"], "player_injury", dead)
+    cols = ["PLAYER", "GAME", "BOOK", "LINE", "OVER", "UNDER", "START"]
+    props = pd.DataFrame([(f"Player {i}", "Owls @ Hawks", "FanDuel", 60.5, -110, -110, "2099-01-01T00:00:00Z") for i in range(6)],
+                         columns=cols)
+    scan = pd.DataFrame({"PLAYER": props["PLAYER"], "GAME": "x", "LINE": 0.0, "VALUES": [[80] * 10] * 6})
+    at = run()
+    at.session_state["nfl_player_reception_yds_props"] = (props, "400")
+    at.session_state["nfl_player_reception_yds_scan"] = (scan, [])
+    click(at, "Build today's NFL slate")
+    assert not at.exception
+    assert any("Couldn't check injury status for 6 prop players" in w.value for w in at.warning)

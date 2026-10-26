@@ -7,13 +7,29 @@ those cost real requests from a monthly budget and a cloud restart wipes the loc
 import json
 import sqlite3
 import time
-from datetime import date
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+try:
+    from zoneinfo import ZoneInfo
+    EASTERN = ZoneInfo("America/New_York")
+except Exception:  # no timezone database on this machine: a fixed offset is close enough
+    EASTERN = timezone(timedelta(hours=-5))
 
 DURABLE_PREFIXES = ("odds_",)
 MISS_SECONDS = 60  # after a failed or empty Supabase lookup, don't ask again for a minute (keeps clicks fast)
 _recent_misses = {}
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "cache.db"
+
+
+def today():
+    """The "betting day" as 'YYYY-MM-DD'. It rolls over at 5 a.m. US Eastern, not at midnight UTC.
+
+    Servers run on UTC, whose midnight is 8 p.m. Eastern. With a plain date, checking the lines in the
+    evening would re-buy answers you already paid for. This way an evening NBA slate stays cached until the
+    next morning.
+    """
+    return (datetime.now(EASTERN) - timedelta(hours=5)).date().isoformat()
 
 
 def _connect(db_path=None):
@@ -40,7 +56,7 @@ def get(key, db_path=None):
     with _connect(db_path) as conn:
         row = conn.execute(
             "SELECT value FROM cache WHERE key = ? AND day = ?",
-            (key, date.today().isoformat()),
+            (key, today()),
         ).fetchone()
     if row:
         return json.loads(row[0])
@@ -48,7 +64,7 @@ def get(key, db_path=None):
     if db is None or time.monotonic() - _recent_misses.get(key, -MISS_SECONDS) < MISS_SECONDS:
         return None
     try:
-        value = db.cache_get(key, date.today().isoformat())
+        value = db.cache_get(key, today())
     except Exception:
         value = None  # Supabase trouble just means a cache miss, never a crash
     if value is None:
@@ -63,12 +79,12 @@ def put(key, value, db_path=None, remote=True):
     with _connect(db_path) as conn:
         conn.execute(
             "INSERT OR REPLACE INTO cache (key, day, value) VALUES (?, ?, ?)",
-            (key, date.today().isoformat(), json.dumps(value)),
+            (key, today(), json.dumps(value)),
         )
     _recent_misses.pop(key, None)
     db = _durable_store(key, db_path) if remote else None
     if db is not None:
         try:
-            db.cache_put(key, date.today().isoformat(), value)
+            db.cache_put(key, today(), value)
         except Exception:
             pass  # the local copy is saved; a Supabase hiccup shouldn't break the page

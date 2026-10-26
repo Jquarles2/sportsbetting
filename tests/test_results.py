@@ -225,3 +225,23 @@ def test_nba_player_stat(monkeypatch):
     assert stats_nba.get_player_stat("Jayson Tatum", "player_points", "New York Knicks", "Boston Celtics", start) == stats_nba.DID_NOT_PLAY
     assert stats_nba.get_player_stat("Jayson Tatum", "player_points", "Nowhere", "New York Knicks", start) is None
     assert stats_nba.DID_NOT_PLAY == stats_nfl.DID_NOT_PLAY == results.DID_NOT_PLAY
+
+
+def test_a_failed_injury_request_is_not_retried_for_a_few_minutes(monkeypatch):
+    calls = []
+
+    def fail(path, params):
+        calls.append(path)
+        raise RuntimeError("401")
+
+    monkeypatch.setattr(stats_nba, "_get", fail)
+    monkeypatch.setattr(stats_nba, "_injuries_failed_at", None)
+    with pytest.raises(RuntimeError):
+        stats_nba.get_injury("Jayson Tatum")
+    for _ in range(5):
+        with pytest.raises(RuntimeError, match="recent request failed"):
+            stats_nba.get_injury("Someone Else")
+    assert len(calls) == 1  # one real attempt; the rest failed instantly
+    monkeypatch.setattr(stats_nba, "_injuries_failed_at", stats_nba.time.monotonic() - 301)  # five minutes later
+    monkeypatch.setattr(stats_nba, "_get", lambda path, params: {"data": [], "meta": {}})
+    assert stats_nba.get_injury("Jayson Tatum") is None  # it tries again and now works

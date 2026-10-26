@@ -10,6 +10,13 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 - **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive) and a leg count. One leg per
   game, never a leg it doesn't trust, and the expected value at fair odds shown (always negative: the
   sportsbook takes a cut on every leg, and the cut multiplies with each leg).
+- **Player props as legs**: props you've already loaded and scanned in the props tabs can join the parlay,
+  for today's games only and at no extra Odds API cost. They are priced at the book's fair odds (no invented
+  edge), must also have been consistent lately (80% / 70% / 60% of the last 10 games for Safe / Balanced /
+  Aggressive), and a player who is Out or on your no-bet list never makes a parlay.
+- **Lotto of the day**: a long-shot ticket, say $0.50 to win $1,000, built from every slate you've built
+  (both sports plus loaded props) with one leg per game. It shows the real odds ("1 in 4,000") and the
+  expected loss, because it is a lottery ticket, not a strategy.
 - **Game talks**: a short Claude-written preview of each game, using only the facts it is given.
 - **No-bet list**: BetGuru's own (a quarterback who is Out or Doubtful, thin data, blowout spreads)
   plus **your own** teams, players and games.
@@ -47,6 +54,39 @@ Keys (all in `.streamlit/secrets.toml`, which is git-ignored):
 | `ANTHROPIC_API_KEY` | console.anthropic.com (pay as you go) | AI write-ups and game talks (optional) |
 | `SUPABASE_URL`, `SUPABASE_KEY` | supabase.com (free), see below | keeping your data across restarts (optional) |
 
+## The Odds API budget (500 requests a month)
+
+Everything is built around spending as little as possible. What costs requests, and what doesn't:
+
+| Action | Cost |
+|---|---|
+| Game lines (moneyline, spread, total) for a sport | **3**, once per betting day per sport |
+| Player props, one prop type | **1 per game** that you haven't already bought today |
+| Quota balance, game counts, cost estimates | free |
+| Scanning players or teams, parlays, the lotto, game talks, write-ups, grading, filters | free (they use stats sources or Claude, not the Odds API) |
+
+How it saves requests:
+- **Bought once, kept all day.** Answers are cached for the "betting day", which rolls over at 5 a.m. Eastern
+  (not at midnight UTC, which is 8 p.m. Eastern), so checking in the evening never re-buys the morning's lines.
+- **Saved in Supabase**, so an app restart doesn't lose them.
+- **Props are bought per game.** Widening the window later pays only for the new games, and narrowing it back is free.
+- **Today's games by default.** The NFL props tab starts on "Today" (one game on a Monday), not the whole week.
+- **No started games.** Pre-game lines and props can't be bet once a game starts, so they aren't bought.
+- **Props in BetGuru are free.** It reuses props you already loaded in the props tabs.
+
+Rough monthly budget (estimates; games per night vary):
+
+| Plan | About |
+|---|---|
+| Game lines: NBA every day + NFL on game days (Thu, Sun, Mon) | 130 |
+| + NBA points props every day (around 7 games a night) | 340 |
+| + one NFL prop type on game days (about 13 on a Sunday, 1 on Thursday and Monday) | 400 |
+| + a second NBA prop type every day | over 550, so it blows the budget |
+
+Good habits: load lines every day you plan to look, load props only for the one or two prop types you actually
+use, and watch the "requests left" line under the title. If you outgrow the free plan, The Odds API sells paid
+plans with far more requests (check their pricing page).
+
 ## Tests
 
 ```
@@ -65,8 +105,8 @@ Downloads nflverse games, tunes on 2012-2023, checks on 2024-2025 and writes `da
 
 ## Costs to keep an eye on
 
-- **Odds API**: props cost 1 request per game per prop type; game lines cost 3 per sport. The app shows
-  the cost before every load and disables buttons you can't afford.
+- **Odds API**: see the budget section below. The app shows the cost before every load and disables buttons
+  you can't afford.
 - **balldontlie**: calls are spaced to stay under the plan's rate limit, so a first scan of a whole slate
   takes a few minutes. Results are cached for the day.
 - **Claude**: a fraction of a cent per write-up or talk (`claude-haiku-5-5`).

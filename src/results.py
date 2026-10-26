@@ -28,7 +28,8 @@ def log_parlay(sport, risk, legs):
     """Save a suggested parlay's legs. Logging the same parlay twice in a day does nothing."""
     today = date.today().isoformat()
     # Prop legs have no team; the "team" column holds the player's name instead (so no schema change).
-    rows = [{"logged_on": today, "sport": sport, "risk": risk, "game": leg.GAME, "start": leg.START,
+    # A ticket can mix sports (the lotto): a leg's own SPORT column wins over the `sport` argument.
+    rows = [{"logged_on": today, "sport": getattr(leg, "SPORT", None) or sport, "risk": risk, "game": leg.GAME, "start": leg.START,
              "market": leg.MARKET, "pick": leg.PICK, "team": _who(leg),
              "line": None if pd.isna(leg.LINE) else float(leg.LINE), "price": float(leg.PRICE),
              "p": float(leg.P)} for leg in legs.itertuples()]
@@ -123,7 +124,10 @@ def parlay_record():
     if df.empty:
         return {"won": 0, "lost": 0, "pending": 0}
     counts = {"won": 0, "lost": 0, "pending": 0}
-    for _, g in df.groupby(["logged_on", "sport", "risk"]):
+    # A lotto ticket can span sports, so it's one parlay per day whatever its legs' sports.
+    df = df.assign(ticket=[(d, "all", r) if r == "Lotto" else (d, sp, r)
+                           for d, sp, r in zip(df["logged_on"], df["sport"], df["risk"])])
+    for _, g in df.groupby("ticket"):
         if (g["result"] == "loss").any():
             counts["lost"] += 1
         elif (g["result"] == "pending").any():

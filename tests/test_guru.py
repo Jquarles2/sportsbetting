@@ -258,3 +258,26 @@ def test_props_must_be_consistent_for_the_risk_level_and_respect_your_list():
     blocked = guru.apply_user_list(legs, [("player", "steady")])
     assert blocked[blocked["PLAYER"] == "Steady"]["USER_REASON"].eq("Your list: Steady").all()
     assert guru.build_parlay(blocked, "Balanced", 2)["legs"]["PLAYER"].tolist() == ["Streaky"]
+
+
+def test_a_dead_injury_feed_is_asked_once_not_for_every_prop():
+    props = props_table(*[(f"Player {i}", "Owls @ Hawks", 20.5, -110, -110) for i in range(40)])
+    scan = scan_table(**{f"Player {i}": [30] * 10 for i in range(40)})
+    asked = []
+
+    def dead(name):
+        asked.append(name)
+        raise RuntimeError("plan doesn't include injuries")
+
+    legs = guru.build_prop_legs(props, scan, "player_points", "points", {}, dead)
+    assert len(legs) == 80 and asked == ["Player 0", "Player 1", "Player 2"]  # three doomed calls, not 40
+    assert legs["SEVERITY"].isna().all()                         # unknown is not flagged as hurt
+    assert legs.attrs["unchecked"] == 40                          # but the page can say it couldn't check them
+
+
+def test_each_players_injury_is_looked_up_once_even_though_he_has_two_legs():
+    props = props_table(("A", "Owls @ Hawks", 20.5, -110, -110), ("B", "Owls @ Hawks", 20.5, -110, -110))
+    scan = scan_table(A=[30] * 10, B=[30] * 10)
+    asked = []
+    guru.build_prop_legs(props, scan, "player_points", "points", {}, lambda n: asked.append(n))
+    assert sorted(asked) == ["A", "B"]

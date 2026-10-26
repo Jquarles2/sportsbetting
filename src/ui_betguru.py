@@ -6,7 +6,7 @@ is saved in st.session_state and everything else is recomputed instantly from it
 import pandas as pd
 import streamlit as st
 
-from src import games, guru, nobet, odds, ratings, results, stats_nba, stats_nfl, store, talks
+from src import games, guru, lotto, nobet, odds, ratings, results, stats_nba, stats_nfl, store, talks
 from src.ui_common import load_cost, quota_left, show_cost
 
 # What differs between sports: where the lines come from, how far ahead to look, and where each
@@ -29,11 +29,12 @@ def loaded_prop_legs(cfg, state):
     """Prop legs from the props you've already loaded and scanned in the NBA/NFL props tabs.
 
     Only games on today's slate count, and it costs no Odds API requests: the props are already here.
-    Returns (legs DataFrame, list of prop labels that contributed).
+    Returns (legs DataFrame, prop labels that contributed, number of players whose injury status
+    couldn't be checked).
     """
     code = cfg["code"]
     slate_games = set(state["lines"]["GAME"])
-    frames, labels = [], []
+    frames, labels, unchecked = [], [], 0
     for market, (_, label) in cfg["markets"].items():
         loaded = st.session_state.get(f"{code}_{market}_props")
         scanned = st.session_state.get(f"{code}_{market}_scan")
@@ -47,7 +48,8 @@ def loaded_prop_legs(cfg, state):
         if not legs.empty:
             frames.append(legs)
             labels.append(label)
-    return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=guru.LEG_COLUMNS)), labels
+            unchecked += legs.attrs.get("unchecked", 0)
+    return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=guru.LEG_COLUMNS)), labels, unchecked
 
 
 def show_storage(where):
@@ -79,6 +81,58 @@ def build_slate(cfg):
     teams = sorted(set(lines["HOME"]) | set(lines["AWAY"]))
     flags = guru.team_flags(teams, cfg["injuries"]) if cfg["injuries"] else {t: [] for t in teams}
     return {"lines": lines, "form": form, "errors": errors, "flags": flags, "remaining": remaining}
+
+
+def make_legs(cfg, state, my_list, use_props):
+    """Every candidate leg for one built slate: games, plus loaded props if wanted, with your list applied."""
+    params = ratings.load_params(cfg["code"])
+    legs = guru.build_legs(state["lines"], state["form"], params, state["flags"], cfg["code"])
+    prop_labels, unchecked = [], 0
+    if use_props:
+        prop_legs, prop_labels, unchecked = loaded_prop_legs(cfg, state)
+        if not prop_legs.empty:
+            legs = pd.concat([legs, prop_legs], ignore_index=True)
+    legs = guru.apply_user_list(legs, my_list, cfg["player_team"])
+    return legs.assign(SPORT=cfg["code"]), prop_labels, unchecked
+
+
+def show_lotto(my_list, use_props):
+    """The lotto ticket: a small stake on a long shot, built from every slate you've built today."""
+    st.caption("A bit of fun: a small stake on a long shot, like a lottery ticket. It combines every slate "
+               "you've built today (and the props you've loaded) to reach the payout you pick, with one leg per game.")
+    left, right = st.columns(2)
+    stake = left.number_input("Stake ($)", min_value=0.10, max_value=10.0, value=0.50, step=0.10, key="bg_lotto_stake")
+    dream = right.select_slider("Win up to ($)", options=[100, 250, 500, 1000, 2500, 5000], value=1000, key="bg_lotto_dream")
+    frames = []
+    for cfg in SPORTS.values():
+        built = st.session_state.get(f"bg_{cfg['code']}_state")
+        if built and not built["lines"].empty:
+            frames.append(make_legs(cfg, built, my_list, use_props)[0])
+    if not frames:
+        st.info("Build a slate first and the lotto ticket appears here.")
+        return
+    ticket = lotto.build_lotto(pd.concat(frames, ignore_index=True), stake, dream)
+    if ticket["p_all"] is None:
+        st.info(ticket["message"])
+        return
+    st.subheader(f"Pay ${stake:.2f} to win ${ticket['profit']:,.2f}")
+    a, b, c = st.columns(3)
+    a.metric("Chance every leg hits", f"1 in {ticket['one_in']:,.0f}")
+    b.metric("Pays (American odds)", f"{ticket['american']:+,d}")
+    c.metric("Expected result per ticket", f"${ticket['ev']:+.2f}")
+    if ticket["message"]:
+        st.info(ticket["message"])
+    for leg in ticket["legs"].itertuples():
+        st.markdown(f"**{leg.PICK}** ({leg.PRICE:+.0f}) - {leg.GAME}")
+    st.caption("Treat it as a lottery ticket: it will almost always lose the stake. The chance is the book's own "
+               "fair chance for every leg multiplied together, and the expected result is always below zero. "
+               "Only play what you'd happily spend.")
+    if st.button("Save this ticket to my record", key="bg_lotto_save"):
+        try:
+            results.log_parlay("lotto", lotto.LOTTO_RISK, ticket["legs"])  # each leg keeps its own sport
+            st.success("Saved. It's graded with the rest on the Model and record tab.")
+        except store.StoreError as e:
+            st.error(f"Couldn't save the ticket: {e}")
 
 
 def show_parlay(code, risk, parlay):
@@ -273,30 +327,29 @@ def render_betguru():
         st.error(f"Couldn't load your no-bet list, so BetGuru won't build a parlay right now: {e}")
         show_storage("error")
         return
-    legs = guru.build_legs(state["lines"], state["form"], params, state["flags"], code)
-    prop_labels = []
-    if use_props:
-        prop_legs, prop_labels = loaded_prop_legs(cfg, state)
-        if not prop_legs.empty:
-            legs = pd.concat([legs, prop_legs], ignore_index=True)
+    legs, prop_labels, unchecked = make_legs(cfg, state, my_list, use_props)
     if prop_labels:
         st.caption(f"Player props in the mix: {', '.join(prop_labels)}. They use the book's fair odds like every other "
                    "leg, and must also be consistent recently (Safe 80% of the last 10 games, Balanced 70%, "
                    "Aggressive 60%).")
+        if unchecked:
+            st.warning(f"Couldn't check injury status for {unchecked} prop players, so they aren't flagged. "
+                       "Unknown is not the same as healthy: check the injury report before betting a prop.")
     elif use_props:
         st.caption(f"No props loaded for today's games. Load and scan them in the {sport_label} props tab and "
                    "they'll appear here with no extra Odds API requests.")
-    legs = guru.apply_user_list(legs, my_list, cfg["player_team"])
     parlay = guru.build_parlay(legs, risk, n_legs)
 
-    parlay_tab, talks_tab, nobet_tab, model_tab = st.tabs(
-        ["Parlay", "Game talks", "No-bet list", "Model and record"])
+    parlay_tab, lotto_tab, talks_tab, nobet_tab, model_tab = st.tabs(
+        ["Parlay", "Lotto", "Game talks", "No-bet list", "Model and record"])
     with parlay_tab:
         show_parlay(code, risk, parlay)
         with st.expander("Every candidate leg"):
             shown = legs.assign(P=(legs["P"] * 100).round(1), EDGE=(legs["EDGE"] * 100).round(1))
             st.dataframe(shown[["PICK", "GAME", "PRICE", "P", "EDGE", "SEVERITY", "USER_REASON"]]
                          .sort_values("P", ascending=False), hide_index=True)
+    with lotto_tab:
+        show_lotto(my_list, use_props)
     with talks_tab:
         show_talks(key, state, params)
     with nobet_tab:

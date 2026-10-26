@@ -16,13 +16,14 @@ def quota_left():
 
 @st.cache_data(ttl=300, show_spinner=False)
 def games_in_window(sport, hours):
-    return odds.count_games(sport, hours)
+    """Ids of the games in the window (a free Odds API call), remembered for 5 minutes."""
+    return odds.event_ids(sport, hours)
 
 
 def load_cost(sport, hours, market=None):
     """What loading would cost in Odds API requests, or None if we can't tell."""
     try:
-        return odds.estimate_cost(sport, hours, market, count=games_in_window)
+        return odds.estimate_cost(sport, hours, market, ids=games_in_window)
     except Exception:
         return None
 

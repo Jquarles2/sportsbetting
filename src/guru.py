@@ -162,16 +162,33 @@ def build_prop_legs(props, scan, odds_market, stat_label, team_flag_map, player_
     player_injury(name) returns an injury dict or None; errors are treated as "unknown".
     """
     recent = dict(zip(scan["PLAYER"], scan["VALUES"]))
+    seen, unchecked, failures_in_a_row = {}, set(), 0
+
+    def injury_of(name):
+        """One lookup per player. A dead feed would otherwise be retried for every prop on the page, so after
+        three failures in a row we stop asking. Players we couldn't check are counted in `unchecked`."""
+        nonlocal failures_in_a_row
+        if player_injury is None:
+            return None
+        if name not in seen:
+            if failures_in_a_row >= 3:
+                unchecked.add(name)
+                return None
+            try:
+                seen[name] = player_injury(name)
+                failures_in_a_row = 0
+            except Exception:
+                failures_in_a_row += 1
+                unchecked.add(name)
+                return None
+        return seen[name]
+
     rows = []
     for p in props.itertuples():
         values = recent.get(p.PLAYER)
         if not values or len(values) < PROP_MIN_GAMES or not (_isnum(p.LINE) and _isnum(p.OVER) and _isnum(p.UNDER)):
             continue
-        try:
-            info = player_injury(p.PLAYER) if player_injury else None
-        except Exception:
-            info = None
-        own = flag_for_player(p.PLAYER, info)
+        own = flag_for_player(p.PLAYER, injury_of(p.PLAYER))
         flags = ([own] if own else []) + [f for t in p.GAME.split(" @ ") for f in team_flag_map.get(t, [])]
         over, under = ratings.devig(p.OVER, p.UNDER)
         last = values[:10]
@@ -182,7 +199,9 @@ def build_prop_legs(props, scan, odds_market, stat_label, team_flag_map, player_
             rows.append(_leg(p, f"{PROP_PREFIX}{odds_market}", f"{p.PLAYER} {side} {p.LINE:g} {stat_label}", None,
                              p.LINE, price, prob, prob, why, flags, player=p.PLAYER,
                              support=round(100 * hits / len(last))))
-    return pd.DataFrame(rows, columns=LEG_COLUMNS)
+    legs = pd.DataFrame(rows, columns=LEG_COLUMNS)
+    legs.attrs["unchecked"] = len(unchecked)  # players whose injury status we couldn't look up
+    return legs
 
 
 # --- No-bet list ---
