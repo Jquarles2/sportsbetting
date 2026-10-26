@@ -11,6 +11,7 @@ restart doesn't make you re-spend your monthly request budget.
 import json
 import sqlite3
 from pathlib import Path
+from urllib.parse import urlparse
 
 import requests
 
@@ -91,12 +92,28 @@ class SQLiteStore:
 class SupabaseStore:
     """Supabase's REST API (PostgREST). The tables come from docs/supabase_setup.sql."""
 
-    name = "Supabase (saved permanently)"
     durable = True
+    NOT_A_PROJECT_HOSTS = ("supabase.com", "www.supabase.com", "app.supabase.com")
 
     def __init__(self, url, key):
-        self.base = url.rstrip("/") + "/rest/v1"
+        url = url.strip()
+        parts = urlparse(url if "://" in url else f"https://{url}")
+        # Only the scheme and host matter: "/rest/v1" is added here, and anything else pasted after the
+        # host (a dashboard path, a trailing slash) is dropped.
+        self.host = parts.netloc
+        self.base = f"{parts.scheme}://{parts.netloc}/rest/v1"
+        self.name = f"Supabase project {self.host} (saved permanently)"
         self.headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
+
+    @staticmethod
+    def _is_missing_table(resp):
+        """True if Supabase itself says the table isn't there, as opposed to a wrong address."""
+        try:
+            body = resp.json()
+        except ValueError:  # not JSON, so it didn't come from Supabase's database API
+            return False
+        text = f"{body.get('code', '')} {body.get('message', '')}" if isinstance(body, dict) else ""
+        return "PGRST205" in text or "42P01" in text or "schema cache" in text or "does not exist" in text
 
     def _request(self, method, table, params=None, body=None, prefer=None):
         headers = {**self.headers, **({"Prefer": prefer} if prefer else {})}
@@ -108,7 +125,13 @@ class SupabaseStore:
         if resp.status_code in (401, 403):
             raise StoreError("Supabase rejected the key (check SUPABASE_KEY: use the secret / service_role key).")
         if resp.status_code == 404 or (resp.status_code == 400 and "does not exist" in resp.text):
-            raise StoreError(f"Supabase has no '{table}' table yet. Run docs/supabase_setup.sql in its SQL editor.")
+            if self._is_missing_table(resp):
+                raise StoreError(f"Supabase project {self.host} has no '{table}' table yet. Run "
+                                 "docs/supabase_setup.sql in that project's SQL editor (then 'notify pgrst, "
+                                 "''reload schema'';' if it still says so).")
+            raise StoreError(f"{self.host} answered 'not found', so SUPABASE_URL is probably wrong. It should look "
+                             "like https://<project-id>.supabase.co (Project Settings, then Data API, then "
+                             "Project URL), with nothing after .supabase.co.")
         if not resp.ok:
             raise StoreError(f"Supabase {method} {table} failed ({resp.status_code}): {resp.text[:200]}")
         return resp.json() if resp.text else None
@@ -124,6 +147,10 @@ class SupabaseStore:
             offset += 1000
 
     def check(self):
+        if self.host in self.NOT_A_PROJECT_HOSTS or not self.host:
+            raise StoreError(f"SUPABASE_URL points at '{self.host or 'nothing'}', which is the Supabase website, not "
+                             "your project. It should look like https://<project-id>.supabase.co (Project "
+                             "Settings, then Data API, then Project URL).")
         for table in TABLES:
             self._request("GET", table, {"select": "*", "limit": 1})
 

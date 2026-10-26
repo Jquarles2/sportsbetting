@@ -120,6 +120,44 @@ def test_network_failure_gives_a_readable_error(monkeypatch):
         store.SupabaseStore(URL, KEY).nobet_list()
 
 
+def test_a_wrong_url_is_not_mistaken_for_missing_tables(monkeypatch):
+    # A 404 that isn't Supabase's own "table not found" answer means the address is wrong.
+    class NotFound:
+        status_code, ok, text = 404, False, "<html>Not Found</html>"
+
+        def json(self):
+            raise ValueError("not json")
+    monkeypatch.setattr(store.requests, "request", lambda *a, **k: NotFound())
+    with pytest.raises(store.StoreError) as err:
+        store.SupabaseStore("https://abcdefgh.supabase.co", KEY).nobet_list()
+    assert "SUPABASE_URL is probably wrong" in str(err.value) and "abcdefgh.supabase.co" in str(err.value)
+    assert "no 'nobet' table" not in str(err.value)
+
+
+def test_pasting_the_dashboard_address_is_caught_before_any_request(monkeypatch):
+    def never(*a, **k):
+        raise AssertionError("should not make a request")
+    monkeypatch.setattr(store.requests, "request", never)
+    with pytest.raises(store.StoreError, match="the Supabase website, not your project"):
+        store.SupabaseStore("https://supabase.com/dashboard/project/abcdefgh", KEY).check()
+
+
+def test_the_url_is_cleaned_up_and_the_project_is_named(fake):
+    fake.url = "https://abcdefgh.supabase.co"
+    for pasted in ("https://abcdefgh.supabase.co/rest/v1/", "https://abcdefgh.supabase.co/", " abcdefgh.supabase.co "):
+        db = store.SupabaseStore(pasted, KEY)
+        assert db.base == "https://abcdefgh.supabase.co/rest/v1"
+        assert db.host == "abcdefgh.supabase.co" and "abcdefgh.supabase.co" in db.name
+        db.check()
+
+
+def test_missing_tables_still_say_so_and_name_the_project(monkeypatch):
+    monkeypatch.setattr(store.requests, "request", FakeSupabase(URL, KEY, tables=()).request)
+    with pytest.raises(store.StoreError) as err:
+        store.SupabaseStore(URL, KEY).check()
+    assert "proj.supabase.co has no 'nobet' table" in str(err.value) and "supabase_setup.sql" in str(err.value)
+
+
 def test_get_store_uses_supabase_only_when_both_secrets_exist(monkeypatch):
     secrets = {}
     monkeypatch.setattr(store, "get_secret", lambda name: secrets.get(name))
