@@ -1,0 +1,6 @@
+streamlit
+pandas
+requests
+nba_api
+nfl_data_py
+pytest
