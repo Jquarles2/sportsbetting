@@ -3,12 +3,7 @@
 Each write-up costs a fraction of a cent, and is cached for the day so reloading is free.
 Needs ANTHROPIC_API_KEY in secrets (see .streamlit/secrets.toml.example).
 """
-import anthropic
-
-from src import analysis, cache
-from src.config import get_secret
-
-MODEL = "claude-haiku-5-5"
+from src import analysis, cache, claude
 SYSTEM = (
     "You write brief, plain-English notes on sports player props for a personal research app. "
     "Use ONLY the numbers and facts you are given. If an injury or matchup fact is given, work it "
@@ -55,29 +50,14 @@ def get_writeup(pick, stat_label, values, facts=(), client=None):
 
     values is the player's recent games, newest first. facts are extra lines like an injury
     status or opponent ranking; they're part of the cache key, so a status change gets a new note.
-    Raises RuntimeError if there's no key,
-    or anthropic.APIError if the API call fails.
+    Raises RuntimeError if there's no key
+    or no reply, or anthropic.APIError if the API call fails.
     """
     key = f"writeup_{pick['PLAYER']}_{pick['SIDE']}_{pick['LINE']}_{stat_label}_{'|'.join(facts)}"
     cached = cache.get(key)
     if cached is not None:
         return cached
 
-    if client is None:
-        api_key = get_secret("ANTHROPIC_API_KEY")
-        if not api_key:
-            raise RuntimeError("No ANTHROPIC_API_KEY found. Add it to your secrets.")
-        client = anthropic.Anthropic(api_key=api_key)
-
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=500,
-        system=SYSTEM,
-        output_config={"effort": "low"},  # a 3-sentence note doesn't need deep thinking
-        messages=[{"role": "user", "content": build_prompt(pick, stat_label, values, facts)}],
-    )
-    text = "".join(b.text for b in response.content if b.type == "text").strip()
-    if not text:  # e.g. a refusal or cut-off, so don't cache an empty note
-        raise RuntimeError(f"No write-up returned (stop reason: {response.stop_reason}).")
+    text = claude.ask(SYSTEM, build_prompt(pick, stat_label, values, facts), client=client)
     cache.put(key, text)
     return text

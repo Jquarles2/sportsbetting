@@ -6,7 +6,7 @@ balldontlie instead. It needs a free API key, stored as BALLDONTLIE_API_KEY in
 """
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -241,4 +241,19 @@ def get_injury(name):
     for row in _injuries():
         if " ".join(row["name"].lower().split()) == wanted:
             return {"status": row["status"], "injury": row["detail"]}
+    return None
+
+
+def get_final(home, away, start):
+    """Final score (home_score, away_score) of a finished NBA game, or None if not final or not found.
+
+    start is the tip-off as a datetime. NBA dates are in US time while ours are UTC, so we look at
+    the day before as well.
+    """
+    dates = [(start - timedelta(days=d)).date().isoformat() for d in (0, 1)]
+    data = _get("/games", {"dates[]": dates, "per_page": 100})["data"]
+    for g in data:
+        if (g.get("status") == "Final" and g["home_team"]["full_name"] == home
+                and g["visitor_team"]["full_name"] == away):
+            return g["home_team_score"], g["visitor_team_score"]
     return None

@@ -97,12 +97,12 @@ def _download_results():
     names = dict(zip(names["team_abbr"], names["team_name"]))
     resp = requests.get(GAMES_URL, timeout=60)
     resp.raise_for_status()
-    df = pd.read_csv(io.StringIO(resp.text), usecols=["season", "week", "home_team", "away_team",
+    df = pd.read_csv(io.StringIO(resp.text), usecols=["season", "week", "gameday", "home_team", "away_team",
                                                       "home_score", "away_score"])
     df = df[df["season"] >= _current_season() - 1].dropna(subset=["home_score", "away_score"])
     df["home"] = df["home_team"].map(names)
     df["away"] = df["away_team"].map(names)
-    return df[["season", "week", "home", "away", "home_score", "away_score"]].to_dict("records")
+    return df[["season", "week", "gameday", "home", "away", "home_score", "away_score"]].to_dict("records")
 
 
 @lru_cache(maxsize=2)
@@ -111,7 +111,7 @@ def _load_results(day):
     if rows is None:
         rows = _download_results()
         cache.put("nfl_results", rows)
-    return pd.DataFrame(rows, columns=["season", "week", "home", "away", "home_score", "away_score"])
+    return pd.DataFrame(rows, columns=["season", "week", "gameday", "home", "away", "home_score", "away_score"])
 
 
 def get_team_games(team_name, n=20):
@@ -248,3 +248,16 @@ def get_player_team(name):
     if rows.empty:
         return None
     return _team_names().get(rows["team"].iloc[0])
+
+
+def get_final(home, away, start):
+    """Final score (home_score, away_score) of a finished game, or None if not final or not found.
+
+    start is the kickoff as a datetime; the game is matched by teams and a game day within 2 days.
+    """
+    df = _load_results(date.today().isoformat())
+    games = df[(df["home"] == home) & (df["away"] == away)]
+    for g in games.itertuples():
+        if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2:
+            return int(g.home_score), int(g.away_score)
+    return None

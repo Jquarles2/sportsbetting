@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import cache, writeups
+from src import cache, claude, writeups
 
 PICK = {"PLAYER": "Jayson Tatum", "GAME": "NYK @ BOS", "SIDE": "Over", "LINE": 27.5}
 VALUES = [30, 31, 28, 35, 29, 20, 33, 30, 28, 40, 22]
@@ -50,7 +50,7 @@ def test_empty_response_raises_and_is_not_cached():
 
 
 def test_missing_key_gives_a_readable_error(monkeypatch):
-    monkeypatch.setattr(writeups, "get_secret", lambda name: None)
+    monkeypatch.setattr(claude, "get_secret", lambda name: None)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         writeups.get_writeup(PICK, "points", VALUES)
 
