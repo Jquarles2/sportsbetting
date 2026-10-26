@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src import analysis, games, odds, picks, stats_nba, stats_nfl
+from src import analysis, games, odds, picks, stats_nba, stats_nfl, writeups
 
 st.set_page_config(page_title="Props Research", page_icon="🏀")
 
@@ -77,6 +77,16 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label):
                 st.write(f"**{leg['PLAYER']}** {leg['SIDE']} {leg['LINE']} {stat_label} ({leg['GAME']})")
             st.caption("Top 5 by cushion over/under the line. Past games don't guarantee anything, "
                        "and every extra leg makes a parlay harder to hit.")
+
+            if st.button("Write up these picks (Claude Haiku)", key=f"{key}_writeups_btn"):
+                recent = dict(zip(scan["PLAYER"], scan["VALUES"]))
+                for _, leg in found.head(5).iterrows():
+                    st.markdown(f"**{leg['PLAYER']}** - {leg['SIDE']} {leg['LINE']} {stat_label}")
+                    try:
+                        st.write(writeups.get_writeup(leg.to_dict(), stat_label, recent[leg["PLAYER"]]))
+                    except Exception as e:
+                        st.error(f"Couldn't write this one up: {e}")
+                        break  # same key or network problem would hit the rest too
 
     st.caption(f"Odds API requests remaining this month: {remaining}")
     return props
