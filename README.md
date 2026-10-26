@@ -7,9 +7,12 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 **BetGuru tab (team vs team)**
 - Loads FanDuel moneylines, spreads and totals for today's games (NBA) or this week's (NFL).
 - Scans each team's recent games and, for the NFL, the weekly injury report.
-- **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive) and a leg count. One leg per
-  game, never a leg it doesn't trust, and the expected value at fair odds shown (always negative: the
-  sportsbook takes a cut on every leg, and the cut multiplies with each leg).
+- **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive), a leg count, and **legs per game**
+  (1 to 3, default 2). It never uses a leg it doesn't trust, and it shows the expected value at fair odds
+  (always negative: the sportsbook takes a cut on every leg, and the cut multiplies with each leg).
+  Legs from the same game are linked, so some pairs are never combined (a moneyline with a spread is the
+  same bet; two totals; one player twice), and the page warns that FanDuel prices same-game parlays
+  differently from multiplying odds.
 - **Combine slates**: build both the NFL and NBA slates and the parlay mixes them, so a one-game Monday night
   still makes a parlay. A parlay that spans sports is saved and graded as one ticket.
 - **Player props as legs**: props you've already loaded and scanned in the props tabs can join the parlay,
@@ -17,7 +20,7 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
   edge), must also have been consistent lately (80% / 70% / 60% of the last 10 games for Safe / Balanced /
   Aggressive), and a player who is Out or on your no-bet list never makes a parlay.
 - **Lotto of the day**: a long-shot ticket, say $0.50 to win $1,000, built from every slate you've built
-  (both sports plus loaded props) with one leg per game. It shows the real odds ("1 in 4,000") and the
+  (both sports plus loaded props), using the same legs-per-game setting. It shows the real odds ("1 in 4,000") and the
   expected loss, because it is a lottery ticket, not a strategy.
 - **Game talks**: a short Claude-written preview of each game, using only the facts it is given.
 - **No-bet list**: BetGuru's own (a quarterback who is Out or Doubtful, thin data, blowout spreads)

@@ -102,10 +102,10 @@ def make_legs(cfg, state, my_list, use_props):
     return legs.assign(SPORT=cfg["code"]), prop_labels, unchecked
 
 
-def show_lotto(my_list, use_props):
+def show_lotto(my_list, use_props, per_game):
     """The lotto ticket: a small stake on a long shot, built from every slate you've built today."""
     st.caption("A bit of fun: a small stake on a long shot, like a lottery ticket. It combines every slate "
-               "you've built today (and the props you've loaded) to reach the payout you pick, with one leg per game.")
+               "you've built today (and the props you've loaded) to reach the payout you pick.")
     left, right = st.columns(2)
     stake = left.number_input("Stake ($)", min_value=0.10, max_value=10.0, value=0.50, step=0.10, key="bg_lotto_stake")
     dream = right.select_slider("Win up to ($)", options=[100, 250, 500, 1000, 2500, 5000], value=1000, key="bg_lotto_dream")
@@ -113,7 +113,7 @@ def show_lotto(my_list, use_props):
     if not frames:
         st.info("Build a slate first and the lotto ticket appears here.")
         return
-    ticket = lotto.build_lotto(pd.concat(frames, ignore_index=True), stake, dream)
+    ticket = lotto.build_lotto(pd.concat(frames, ignore_index=True), stake, dream, per_game)
     if ticket["p_all"] is None:
         st.info(ticket["message"])
         return
@@ -126,6 +126,9 @@ def show_lotto(my_list, use_props):
         st.info(ticket["message"])
     for leg in ticket["legs"].itertuples():
         st.markdown(f"**{leg.PICK}** ({leg.PRICE:+.0f}) - {leg.GAME}")
+    if ticket["legs"]["GAME"].duplicated().any():
+        st.caption("Some legs share a game, so they're linked and FanDuel will price them as a same-game parlay. "
+                   "The payout and the chance above are estimates that treat the legs as independent.")
     st.caption("Treat it as a lottery ticket: it will almost always lose the stake. The chance is the book's own "
                "fair chance for every leg multiplied together, and the expected result is always below zero. "
                "Only play what you'd happily spend.")
@@ -137,13 +140,13 @@ def show_lotto(my_list, use_props):
             st.error(f"Couldn't save the ticket: {e}")
 
 
-def show_parlay(code, risk, parlay, n_games):
-    """n_games is how many different games we could pick from; with fewer than 2 no parlay is possible."""
+def show_parlay(code, risk, parlay, n_games, per_game):
+    """n_games is how many different games we could pick from; with one leg per game, fewer than 2 can't make a parlay."""
     if parlay["message"]:
-        if parlay["p_all"] is None and n_games < 2:
+        if parlay["p_all"] is None and n_games * per_game < 2:
             st.info(f"Only {n_games} game{'s' if n_games != 1 else ''} to pick from, and a parlay needs at least two "
-                    "different games. Build the other sport's slate and tick \"Combine with my other built slates\" "
-                    "to mix them.")
+                    "legs from different games. Allow more legs per game, or build the other sport's slate and tick "
+                    "\"Combine with my other built slates\".")
         else:
             st.info(parlay["message"])
     legs = parlay["legs"]
@@ -158,6 +161,10 @@ def show_parlay(code, risk, parlay, n_games):
         st.caption(leg.WHY)
         for flag in leg.FLAGS:
             st.caption(f"⚠️ {flag['reason']}")
+    if legs["GAME"].duplicated().any():
+        st.caption("Some legs share a game, so they're linked (a winning team is likelier to cover, a shootout moves "
+                   "the total). FanDuel prices that as a same-game parlay, so its payout can differ from the "
+                   "number above, and the chance treats the legs as independent.")
     st.caption("Expected value is what you should expect on average if BetGuru has no edge: the book's own "
                "fair chances against the real prices. It is always negative, because the sportsbook takes a "
                "cut on every leg and the cut multiplies with each added leg.")
@@ -301,9 +308,10 @@ def render_betguru():
     st.session_state["bg_code"] = code
     key = f"bg_{code}"
 
-    left, right = st.columns(2)
+    left, middle, right = st.columns(3)
     risk = left.select_slider("Risk level", options=list(guru.PROFILES), value="Balanced", key="bg_risk")
-    n_legs = right.slider("Legs", 2, 6, 3, key="bg_legs")
+    n_legs = middle.slider("Legs", 2, 6, 3, key="bg_legs")
+    per_game = right.select_slider("Legs per game", options=[1, 2, 3], value=2, key="bg_per_game")
     st.caption(guru.PROFILES[risk]["blurb"])
     use_props = st.checkbox("Include player props I've loaded", value=True, key=f"{key}_useprops")
     combine = st.checkbox("Combine with my other built slates", value=True, key="bg_combine")
@@ -355,18 +363,18 @@ def render_betguru():
             parlay_legs = pd.concat([legs] + [make_legs(c, built_state(c), my_list, use_props)[0] for c in others],
                                     ignore_index=True)
             st.caption("Parlay legs come from: " + ", ".join(sorted({c["code"].upper() for c in others} | {code.upper()})) + ".")
-    parlay = guru.build_parlay(parlay_legs, risk, n_legs)
+    parlay = guru.build_parlay(parlay_legs, risk, n_legs, per_game)
 
     parlay_tab, lotto_tab, talks_tab, nobet_tab, model_tab = st.tabs(
         ["Parlay", "Lotto", "Game talks", "No-bet list", "Model and record"])
     with parlay_tab:
-        show_parlay(code, risk, parlay, parlay_legs["GAME"].nunique())
+        show_parlay(code, risk, parlay, parlay_legs["GAME"].nunique(), per_game)
         with st.expander("Every candidate leg"):
             shown = parlay_legs.assign(P=(parlay_legs["P"] * 100).round(1), EDGE=(parlay_legs["EDGE"] * 100).round(1))
             st.dataframe(shown[["PICK", "GAME", "PRICE", "P", "EDGE", "SEVERITY", "USER_REASON"]]
                          .sort_values("P", ascending=False), hide_index=True)
     with lotto_tab:
-        show_lotto(my_list, use_props)
+        show_lotto(my_list, use_props, per_game)
     with talks_tab:
         show_talks(key, state, params)
     with nobet_tab:

@@ -67,9 +67,22 @@ def test_flagged_excluded_and_inconsistent_legs_are_never_used():
 
 def test_one_game_cannot_make_a_ticket():
     ticket = lotto.build_lotto(slate(1), stake=0.50, target_profit=1000)
-    assert ticket["p_all"] is None and "at least two different games" in ticket["message"]
+    assert ticket["p_all"] is None and "needs at least two legs" in ticket["message"]
 
 
 def test_no_legs_at_all():
     ticket = lotto.build_lotto(slate(0), stake=0.50, target_profit=1000)
     assert ticket["p_all"] is None and "No legs" in ticket["message"]
+
+
+def test_more_legs_per_game_lets_a_small_slate_reach_the_payout():
+    games = []
+    for i in range(6):  # six games, each with a side and a total at -110
+        games.append(leg(f"G{i}", f"side{i}", -110, 0.5))
+        games.append(leg(f"G{i}", f"total{i}", -110, 0.5, MARKET="Total"))
+    legs = pd.DataFrame(games, columns=guru.LEG_COLUMNS)
+    one = lotto.build_lotto(legs, stake=0.50, target_profit=1000, per_game=1)
+    two = lotto.build_lotto(legs, stake=0.50, target_profit=1000, per_game=2)
+    assert "can't reach" in one["message"] and len(one["legs"]) == 6                  # six games, one leg each
+    assert two["message"] == "" and len(two["legs"]) == 12 and two["profit"] >= 1000  # a side and a total in each
+    assert two["legs"]["GAME"].value_counts().max() == 2

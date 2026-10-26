@@ -49,6 +49,10 @@ def run():
     return AppTest.from_file(APP, default_timeout=60).run()
 
 
+def one_per_game(at):
+    at.select_slider(key="bg_per_game").set_value(1).run()
+
+
 def has_parlay(at):
     """True if the page is showing a parlay (the lotto has similar metrics, so look for the parlay's own)."""
     return any(m.label.startswith("Expected value per $100") for m in at.metric)
@@ -189,6 +193,7 @@ def test_without_loaded_props_the_tab_says_how_to_add_them():
 
 def test_lotto_combines_both_slates_and_is_saved_as_one_ticket_with_each_legs_sport():
     at = run()
+    one_per_game(at)
     click(at, "Build today's NFL slate")
     at.radio(key="bg_sport").set_value("NBA").run()
     click(at, "Build today's NBA slate")
@@ -221,6 +226,7 @@ def test_page_warns_when_injury_status_could_not_be_checked(monkeypatch):
 def test_a_one_game_slate_explains_why_there_is_no_parlay(monkeypatch):
     monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES.head(1), "397"))
     at = run()
+    one_per_game(at)
     click(at, "Build today's NFL slate")
     assert not at.exception and not has_parlay(at)
     assert any("Only 1 game to pick from" in i.value and "Combine with my other built slates" in i.value for i in at.info)
@@ -230,6 +236,7 @@ def test_a_parlay_can_mix_sports_and_is_saved_as_one_mixed_ticket(monkeypatch):
     monkeypatch.setattr(odds, "get_game_lines",
                         lambda sport, hours: ((NBA_LINES if sport == odds.NBA else LINES.head(1)), "397"))
     at = run()
+    one_per_game(at)
     click(at, "Build today's NFL slate")                       # Monday night: a single game
     at.radio(key="bg_sport").set_value("NBA").run()
     click(at, "Build today's NBA slate")
@@ -248,9 +255,35 @@ def test_combining_can_be_switched_off(monkeypatch):
     monkeypatch.setattr(odds, "get_game_lines",
                         lambda sport, hours: ((NBA_LINES if sport == odds.NBA else LINES.head(1)), "397"))
     at = run()
+    one_per_game(at)
     click(at, "Build today's NFL slate")
     at.radio(key="bg_sport").set_value("NBA").run()
     click(at, "Build today's NBA slate")
     at.radio(key="bg_sport").set_value("NFL").run()
     at.checkbox(key="bg_combine").set_value(False).run()
     assert not at.exception and not has_parlay(at)              # alone, the one NFL game can't make a 3-leg parlay
+
+
+def test_with_two_legs_per_game_one_game_can_make_a_parlay_and_says_the_legs_are_linked(monkeypatch):
+    monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES.head(1), "397"))
+    monkeypatch.setitem(ui_betguru.SPORTS["NFL"], "injuries", lambda team: [])  # nobody hurt, so every leg is usable
+    at = run()
+    at.select_slider(key="bg_risk").set_value("Aggressive").run()
+    at.slider(key="bg_legs").set_value(2).run()
+    click(at, "Build today's NFL slate")                      # the default is 2 legs per game
+    assert not at.exception and has_parlay(at)
+    # Parlay legs show their chance, like "(-250, 75%)"; the lotto's legs don't, so this counts only the parlay.
+    picks = [m.value for m in at.markdown if m.value.startswith("**") and "%)" in m.value and "Owls @ Hawks" in m.value]
+    assert len(picks) == 2 and any("to win" in p for p in picks) and any("Over 44.5" in p for p in picks)
+    assert any("Some legs share a game" in c.value for c in at.caption)
+
+
+def test_legs_per_game_of_three_is_allowed_but_never_a_moneyline_with_a_spread(monkeypatch):
+    monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES.head(1), "397"))
+    at = run()
+    at.select_slider(key="bg_per_game").set_value(3).run()
+    at.select_slider(key="bg_risk").set_value("Aggressive").run()
+    at.slider(key="bg_legs").set_value(3).run()
+    click(at, "Build today's NFL slate")
+    shown = " ".join(m.value for m in at.markdown if m.value.startswith("**"))
+    assert not ("to win" in shown and any(f"Hawks {x}" in shown or f"Owls {x}" in shown for x in ("-", "+")))
