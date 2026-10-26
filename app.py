@@ -42,6 +42,11 @@ def show_cost(cost):
     return left is not None and cost > left
 
 
+def facts_list(*facts):
+    """Keep only the facts we actually have (the describe_* helpers return None for nothing to say)."""
+    return [f for f in facts if f]
+
+
 left = quota_left()
 if left is not None:
     if left < 100:
@@ -50,7 +55,7 @@ if left is not None:
         st.caption(f"Odds API requests left this month: {left}")
 
 
-def props_dashboard(key, load_props, get_values, stat_label, load_label, cost):
+def props_dashboard(key, load_props, get_values, stat_label, load_label, cost, get_facts=None):
     """Load FanDuel props, scan players' recent games, then filter and sort the results.
 
     NBA and NFL share this. They differ only in the function that loads props, the function
@@ -58,6 +63,7 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label, cost):
     tab's results separate in session_state: Streamlit reruns the whole script on every click,
     so anything we want to keep between clicks has to live there.
     cost() says how many Odds API requests loading would use, or None if unknown.
+    get_facts(player, game), if given, returns extra fact lines (injury, matchup) for the write-ups.
     Returns the loaded props table, or None if nothing is loaded yet.
     """
     too_expensive = show_cost(cost())
@@ -125,13 +131,22 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label, cost):
 
             if st.button("Write up these picks (Claude Haiku)", key=f"{key}_writeups_btn"):
                 recent = dict(zip(scan["PLAYER"], scan["VALUES"]))
+                facts_missing = False
                 for _, leg in found.head(5).iterrows():
                     st.markdown(f"**{leg['PLAYER']}** - {leg['SIDE']} {leg['LINE']} {stat_label}")
+                    facts = []
+                    if get_facts:
+                        try:  # a missing injury report shouldn't stop the write-up
+                            facts = get_facts(leg["PLAYER"], leg["GAME"])
+                        except Exception:
+                            facts_missing = True
                     try:
-                        st.write(writeups.get_writeup(leg.to_dict(), stat_label, recent[leg["PLAYER"]]))
+                        st.write(writeups.get_writeup(leg.to_dict(), stat_label, recent[leg["PLAYER"]], facts))
                     except Exception as e:
                         st.error(f"Couldn't write this one up: {e}")
                         break  # same key or network problem would hit the rest too
+                if facts_missing:
+                    st.caption("Injury or matchup info wasn't available for some picks, so those notes leave it out.")
 
     st.caption(f"Odds API requests remaining this month: {remaining}")
     return props
@@ -226,6 +241,7 @@ with nba_tab:
         stat_label=nba_label,
         load_label=f"Load today's {nba_label} props",
         cost=lambda: load_cost(odds.NBA, 24, nba_market),
+        get_facts=lambda player, game: facts_list(writeups.describe_injury(stats_nba.get_injury(player))),
     )
 
     if props is not None and not props.empty:
@@ -269,6 +285,10 @@ with nfl_tab:
         stat_label=stat_label,
         load_label=f"Load this week's {stat_label} props",
         cost=lambda: load_cost(odds.NFL, 24 * 7, market),
+        get_facts=lambda player, game: facts_list(
+            writeups.describe_injury(stats_nfl.get_injury(player)),
+            writeups.describe_matchup(stats_nfl.get_matchup(player, market, game), stat_label),
+        ),
     )
 
     st.header("NFL moneylines, spreads and totals")
