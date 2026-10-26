@@ -37,8 +37,8 @@ def _get(path, params):
     )
     if resp.status_code == 401:
         raise RuntimeError(
-            "balldontlie rejected the request (401). Check the API key, or your plan "
-            "may not include this data (game stats can need a paid plan)."
+            f"balldontlie rejected the {path} request (401). For /players that means a bad "
+            "API key; for /stats it usually means your plan doesn't include game stats."
         )
     if resp.status_code == 429:
         raise RuntimeError("balldontlie rate limit hit (free plan is 5 requests/minute). Wait a minute.")
