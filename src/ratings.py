@@ -26,11 +26,13 @@ WINDOWS = (5, 10, 20)
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
 # Starting settings, used when a sport hasn't been trained (the NBA has no free historical lines).
+# The NBA tilts are deliberately small: NFL backtests found no edge over the market, so until the
+# NBA model has live results of its own it should stay close to what the book says.
 DEFAULTS = {
     "nfl": {"w5": 0.3, "w10": 0.4, "w20": 0.3, "home_adv": 2.0, "shrink": 0.8,
             "k_spread": 0.12, "k_total": 0.08, "k_ml": 0.12},
     "nba": {"w5": 0.3, "w10": 0.4, "w20": 0.3, "home_adv": 2.5, "shrink": 0.8,
-            "k_spread": 0.15, "k_total": 0.06, "k_ml": 0.12},
+            "k_spread": 0.02, "k_total": 0.015, "k_ml": 0.02},
 }
 # The ranges the optimizer searches.
 # A k of 0 means "ignore our model and trust the market", so the search is allowed to pick it.

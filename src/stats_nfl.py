@@ -25,6 +25,8 @@ MARKETS = {
 }
 KEEP = ["player_display_name", "season", "week", "season_type", "team", "opponent_team",
         "passing_yards", "rushing_yards", "receiving_yards", "receptions"]
+INJURY_COLUMNS = ["week", "team", "position", "full_name", "report_status",
+                  "report_primary_injury", "practice_status"]
 INJURIES_URL = ("https://github.com/nflverse/nflverse-data/releases/download/"
                 "injuries/injuries_{season}.csv")
 GAMES_URL = "https://github.com/nflverse/nflverse-data/releases/download/schedules/games.csv"
@@ -145,8 +147,7 @@ def _download_injuries(season):
     if resp.status_code == 404:  # no report yet (offseason / before week 1)
         return []
     resp.raise_for_status()
-    cols = ["week", "full_name", "report_status", "report_primary_injury", "practice_status"]
-    return pd.read_csv(io.StringIO(resp.text), usecols=cols).to_dict("records")
+    return pd.read_csv(io.StringIO(resp.text), usecols=INJURY_COLUMNS).to_dict("records")
 
 
 @lru_cache(maxsize=2)
@@ -157,8 +158,7 @@ def _load_injuries(day):
     if rows is None:
         rows = _download_injuries(season)
         cache.put(f"nfl_injuries_{season}", rows)
-    df = pd.DataFrame(rows, columns=["week", "full_name", "report_status",
-                                     "report_primary_injury", "practice_status"])
+    df = pd.DataFrame(rows, columns=INJURY_COLUMNS)
     df = df[df["week"] == df["week"].max()] if len(df) else df
     df = df.assign(KEY=df["full_name"].map(_normalize))
     return df
@@ -217,3 +217,34 @@ def get_matchup(name, market, game):
     allowed = float(per_game[opponent])
     rank = int((per_game > allowed).sum()) + 1
     return {"opponent": opponent, "per_game": round(allowed, 1), "rank": rank, "teams": len(per_game)}
+
+
+KEY_POSITIONS = ("QB", "RB", "WR", "TE")  # the players who most change a team's scoring
+GAME_STATUSES = {"Out": 0, "Doubtful": 1, "Questionable": 2}  # lower = more serious
+
+
+def get_team_injuries(team_name):
+    """Key players (QB/RB/WR/TE) on a team with a game status of Out, Doubtful or Questionable.
+
+    Returns a list of {'name', 'position', 'status', 'injury'}, most serious first. The list is
+    empty if there's no report or nobody is listed.
+    """
+    df = _load_injuries(date.today().isoformat())
+    if df.empty:
+        return []
+    names = _team_names()
+    team = df[df["team"].map(lambda abbr: names.get(abbr)) == team_name]
+    team = team[team["position"].isin(KEY_POSITIONS) & team["report_status"].isin(GAME_STATUSES)]
+    out = [{"name": r.full_name, "position": r.position, "status": r.report_status,
+            "injury": None if pd.isna(r.report_primary_injury) else r.report_primary_injury}
+           for r in team.itertuples()]
+    return sorted(out, key=lambda p: (GAME_STATUSES[p["status"]], KEY_POSITIONS.index(p["position"])))
+
+
+def get_player_team(name):
+    """The full name of the team a player most recently played for, or None if unknown."""
+    table = _load_table(date.today().isoformat())
+    rows = table[table["KEY"] == _normalize(name)].sort_values(["season", "week"], ascending=False)
+    if rows.empty:
+        return None
+    return _team_names().get(rows["team"].iloc[0])
