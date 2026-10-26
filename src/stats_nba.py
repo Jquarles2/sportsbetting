@@ -103,3 +103,9 @@ def get_game_logs(name, n=10):
     if not rows:
         return pd.DataFrame(columns=LOG_COLUMNS)
     return pd.DataFrame(rows).head(n)[LOG_COLUMNS].reset_index(drop=True)
+
+
+def get_recent_points(name, n=20):
+    """A player's last n point totals, newest first, or None if the player isn't found."""
+    logs = get_game_logs(name, n=n)
+    return None if logs is None else [int(p) for p in logs["PTS"]]

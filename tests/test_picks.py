@@ -1,6 +1,6 @@
 import pandas as pd
 
-from src import picks, stats_nba
+from src import picks
 
 
 def test_five_of_five_over_under_and_miss():
@@ -13,7 +13,7 @@ def test_five_of_five_over_under_and_miss():
     assert picks.five_of_five("A", "g", 20.5, [25, 22, 30]) is None  # too few games
 
 
-def test_scan_and_find_picks(monkeypatch):
+def test_scan_and_find_picks():
     props = pd.DataFrame({
         "PLAYER": ["Hot", "Hot", "Safe", "Cold", "Broken"],
         "GAME": ["x"] * 5,
@@ -21,14 +21,13 @@ def test_scan_and_find_picks(monkeypatch):
     })
     logs = {"Hot": [25] * 5, "Safe": [30] * 5, "Cold": [10, 30, 10, 30, 10]}
 
-    def fake_logs(name, n):
+    def fake_values(name):
         if name == "Broken":
             raise RuntimeError("boom")
-        return pd.DataFrame({"PTS": logs[name]})
+        return logs[name]
 
-    monkeypatch.setattr(stats_nba, "get_game_logs", fake_logs)
     seen = []
-    scan, errors = picks.scan_players(props, progress=lambda d, t: seen.append((d, t)), pause=0)
+    scan, errors = picks.scan_players(props, fake_values, progress=lambda d, t: seen.append((d, t)), pause=0)
     assert errors == ["Broken: boom"] and seen[-1] == (4, 4)
     assert scan.set_index("PLAYER").loc["Hot", "LINE"] == 21.0  # median of the two books
     # Hot's cushion is 4, Safe's 19.5; Cold isn't 5/5.

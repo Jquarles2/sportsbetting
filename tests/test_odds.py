@@ -50,7 +50,7 @@ def test_get_todays_props_skips_far_future_games_and_caches(tmp_path, monkeypatc
 
 def test_get_todays_props_fetches_games_starting_soon(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_within_24h", lambda e: True)
+    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
 
     def fake_get(path, params):
         return ([event()], "499") if path.endswith("/events") else (props_json(), "498")
@@ -62,7 +62,7 @@ def test_get_todays_props_fetches_games_starting_soon(tmp_path, monkeypatch):
 
 def test_game_without_props_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_within_24h", lambda e: True)
+    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
 
     def fake_get(path, params):
         if path.endswith("/events"):

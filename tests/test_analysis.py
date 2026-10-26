@@ -42,6 +42,6 @@ def test_rate_and_props_table():
     assert analysis.rate(pts, 20.5, 5, "Under") == 40.0
     assert analysis.rate(pts, 20.5, 2) == 100.0
     assert analysis.rate([], 20.5, 5) is None
-    scan = pd.DataFrame({"PLAYER": ["A"], "GAME": ["x"], "LINE": [20.5], "PTS": [pts]})
+    scan = pd.DataFrame({"PLAYER": ["A"], "GAME": ["x"], "LINE": [20.5], "VALUES": [pts]})
     row = analysis.props_table(scan).iloc[0]
     assert (row["L5"], row["L10"], row["L20"]) == (60.0, 60.0, 60.0)

@@ -41,7 +41,7 @@ def props_table(scan, side="Over"):
     """One row per prop with hit rates over the last 5, 10 and 20 games."""
     rows = [
         {"PLAYER": r.PLAYER, "GAME": r.GAME, "LINE": r.LINE,
-         **{f"L{n}": rate(r.PTS, r.LINE, n, side) for n in WINDOWS}}
+         **{f"L{n}": rate(r.VALUES, r.LINE, n, side) for n in WINDOWS}}
         for r in scan.itertuples()
     ]
     return pd.DataFrame(rows, columns=["PLAYER", "GAME", "LINE", "L5", "L10", "L20"])
