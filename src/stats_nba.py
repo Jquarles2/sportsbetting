@@ -6,7 +6,7 @@ balldontlie instead. It needs a free API key, stored as BALLDONTLIE_API_KEY in
 """
 import threading
 import time
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import requests
@@ -205,3 +205,55 @@ def get_team_games(team_name, n=20):
         games.sort(key=lambda g: g["date"], reverse=True)
         cache.put(key, games)
     return [{"for": g["for"], "against": g["against"]} for g in games[:n]]
+
+
+def _injuries():
+    """Everyone on balldontlie's injury list as {'name', 'status', 'detail'} dicts, cached for the day."""
+    rows = cache.get("bdl_injuries")
+    if rows is None:
+        rows, cursor = [], None
+        for _ in range(5):
+            params = {"per_page": 100}
+            if cursor:
+                params["cursor"] = cursor
+            data = _get("/player_injuries", params)
+            for item in data["data"]:
+                player = item.get("player") or {}
+                rows.append({
+                    "name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
+                    "status": item.get("status"),
+                    "detail": item.get("description") or item.get("comment"),
+                })
+            cursor = data.get("meta", {}).get("next_cursor")
+            if not cursor:
+                break
+        cache.put("bdl_injuries", rows)
+    return rows
+
+
+def get_injury(name):
+    """The player's entry on the injury list as {'status', 'injury'}, or None if they aren't on it.
+
+    The list only has hurt players, so unlike the NFL report, being absent means healthy. Raises
+    if the API call fails (for example if the plan doesn't include injuries).
+    """
+    wanted = " ".join(name.lower().split())
+    for row in _injuries():
+        if " ".join(row["name"].lower().split()) == wanted:
+            return {"status": row["status"], "injury": row["detail"]}
+    return None
+
+
+def get_final(home, away, start):
+    """Final score (home_score, away_score) of a finished NBA game, or None if not final or not found.
+
+    start is the tip-off as a datetime. NBA dates are in US time while ours are UTC, so we look at
+    the day before as well.
+    """
+    dates = [(start - timedelta(days=d)).date().isoformat() for d in (0, 1)]
+    data = _get("/games", {"dates[]": dates, "per_page": 100})["data"]
+    for g in data:
+        if (g.get("status") == "Final" and g["home_team"]["full_name"] == home
+                and g["visitor_team"]["full_name"] == away):
+            return g["home_team_score"], g["visitor_team_score"]
+    return None

@@ -2,7 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from src import cache, writeups
+from src import cache, claude, writeups
 
 PICK = {"PLAYER": "Jayson Tatum", "GAME": "NYK @ BOS", "SIDE": "Over", "LINE": 27.5}
 VALUES = [30, 31, 28, 35, 29, 20, 33, 30, 28, 40, 22]
@@ -50,6 +50,32 @@ def test_empty_response_raises_and_is_not_cached():
 
 
 def test_missing_key_gives_a_readable_error(monkeypatch):
-    monkeypatch.setattr(writeups, "get_secret", lambda name: None)
+    monkeypatch.setattr(claude, "get_secret", lambda name: None)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         writeups.get_writeup(PICK, "points", VALUES)
+
+
+def test_fact_lines():
+    assert writeups.describe_injury({"status": "Questionable", "injury": "Groin"}) == \
+        "Injury report: Questionable (Groin)."
+    assert writeups.describe_injury({"status": "Out", "injury": None}) == "Injury report: Out."
+    assert writeups.describe_injury({"status": None, "injury": None}) is None
+    assert writeups.describe_injury(None) is None
+    assert writeups.describe_matchup(None, "passing yards") is None
+    line = writeups.describe_matchup(
+        {"opponent": "Denver Broncos", "per_game": 236.0, "rank": 17, "teams": 32}, "passing yards")
+    assert "Denver Broncos allows 236.0 passing yards per game" in line and "17 of 32" in line
+
+
+def test_facts_go_in_the_prompt_and_the_cache_key():
+    facts = ["Injury report: Questionable (Groin)."]
+    prompt = writeups.build_prompt(PICK, "points", VALUES, facts)
+    assert prompt.endswith("Injury report: Questionable (Groin).")
+    assert "Injury report" not in writeups.build_prompt(PICK, "points", VALUES)
+
+    client = FakeClient()
+    writeups.get_writeup(PICK, "points", VALUES, client=client)
+    writeups.get_writeup(PICK, "points", VALUES, facts, client=client)
+    assert len(client.calls) == 2  # a new injury status gets a fresh note, not the cached one
+    writeups.get_writeup(PICK, "points", VALUES, facts, client=client)
+    assert len(client.calls) == 2

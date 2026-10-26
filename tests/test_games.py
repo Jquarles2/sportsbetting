@@ -58,3 +58,18 @@ def test_nfl_team_games(tmp_path, monkeypatch):
         {"for": 31, "against": 10}, {"for": 27, "against": 20}]
     assert stats_nfl.get_team_games("Denver Broncos") == [{"for": 20, "against": 27}]
     assert stats_nfl.get_team_games("Nobody") is None
+
+
+def test_nba_injury_lookup(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    calls = []
+
+    def fake_get(path, params):
+        calls.append(path)
+        return {"data": [{"player": {"first_name": "Jayson", "last_name": "Tatum"},
+                          "status": "Day-To-Day", "description": "Sore ankle"}], "meta": {}}
+
+    monkeypatch.setattr(stats_nba, "_get", fake_get)
+    assert stats_nba.get_injury("jayson  TATUM") == {"status": "Day-To-Day", "injury": "Sore ankle"}
+    assert stats_nba.get_injury("Healthy Player") is None  # not on the list means healthy
+    assert calls == ["/player_injuries"]  # the list is fetched once and cached
