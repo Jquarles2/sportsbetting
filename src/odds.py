@@ -36,6 +36,14 @@ def _get(path, params):
     return resp.json(), resp.headers.get("x-requests-remaining")
 
 
+def props_cache_key(sport, market):
+    return f"odds_{sport}_{market}_{BOOKMAKER}"
+
+
+def lines_cache_key(sport):
+    return f"odds_{sport}_lines_{BOOKMAKER}"
+
+
 def _starts_soon(event, hours):
     start = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
@@ -67,7 +75,7 @@ def get_todays_props(sport=NBA, market="player_points", hours=24):
 
     Cached for the day, separately for each sport and market.
     """
-    cache_key = f"odds_{sport}_{market}_{BOOKMAKER}"
+    cache_key = props_cache_key(sport, market)
     cached = cache.get(cache_key)
     if cached is None:
         events, remaining = _get(f"/sports/{sport}/events", {})  # listing is free
@@ -124,7 +132,7 @@ def get_game_lines(sport=NBA, hours=24):
 
     One call covers every game, but it costs 1 request per market (3 here). Cached for the day.
     """
-    cache_key = f"odds_{sport}_lines_{BOOKMAKER}"
+    cache_key = lines_cache_key(sport)
     cached = cache.get(cache_key)
     if cached is None:
         events, remaining = _get(
@@ -137,3 +145,33 @@ def get_game_lines(sport=NBA, hours=24):
 
     df = pd.DataFrame(cached["rows"], columns=LINE_COLUMNS)
     return df.sort_values("START").reset_index(drop=True), cached["remaining"]
+
+
+# --- Free calls: The Odds API doesn't charge for /sports or for listing a sport's events. ---
+
+def requests_remaining():
+    """Requests left this month as an int, or None if the API didn't say."""
+    _, remaining = _get("/sports", {})
+    return int(remaining) if remaining is not None else None
+
+
+def count_games(sport, hours):
+    """How many games start within `hours` (these are the games a props load would pay for)."""
+    events, _ = _get(f"/sports/{sport}/events", {})
+    return sum(_starts_soon(e, hours) for e in events)
+
+
+def estimate_cost(sport, hours, market=None, count=count_games):
+    """Requests a load would use right now. Pass market for props, or leave it out for game lines.
+
+    It's 0 when today's result is already cached. Props cost 1 request per game; game lines
+    cost 3 (one per market: moneyline, spread, total) however many games there are.
+    `count` is the function that counts games; the app passes a cached one.
+    """
+    if market:
+        if cache.get(props_cache_key(sport, market)) is not None:
+            return 0
+        return count(sport, hours)
+    if cache.get(lines_cache_key(sport)) is not None:
+        return 0
+    return 3

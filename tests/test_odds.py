@@ -105,3 +105,33 @@ def test_get_game_lines_filters_by_time_and_caches(tmp_path, monkeypatch):
     assert len(calls) == 1
     df, remaining = odds.get_game_lines(odds.NFL, hours=24 * 365 * 100)
     assert len(df) == 1 and remaining == "497"
+
+
+def test_free_calls_and_cost_estimates(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    paths = []
+
+    def fake_get(path, params):
+        paths.append(path)
+        if path == "/sports":
+            return [], "312"
+        return [event("a"), event("b")], "312"
+
+    monkeypatch.setattr(odds, "_get", fake_get)
+    assert odds.requests_remaining() == 312
+    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: e["id"] == "a")
+    assert odds.count_games(odds.NBA, 24) == 1
+    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 1  # 1 game, 1 request
+    assert odds.estimate_cost(odds.NBA, 24) == 3  # game lines are always 3
+
+    # Once today's result is cached, loading again is free.
+    cache.put(odds.props_cache_key(odds.NBA, "player_points"), {"rows": [], "remaining": "1"})
+    cache.put(odds.lines_cache_key(odds.NBA), {"rows": [], "remaining": "1"})
+    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 0
+    assert odds.estimate_cost(odds.NBA, 24) == 0
+    assert set(paths) <= {"/sports", f"/sports/{odds.NBA}/events"}  # nothing that costs money
+
+
+def test_remaining_is_none_when_header_missing(monkeypatch):
+    monkeypatch.setattr(odds, "_get", lambda path, params: ([], None))
+    assert odds.requests_remaining() is None

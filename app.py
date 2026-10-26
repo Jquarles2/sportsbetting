@@ -7,18 +7,64 @@ st.set_page_config(page_title="Props Research", page_icon="🏀")
 st.title("Props Research")
 
 
-def props_dashboard(key, load_props, get_values, stat_label, load_label):
+@st.cache_data(ttl=300, show_spinner=False)
+def quota_left():
+    """Odds API requests left this month, or None if we can't tell. Free to ask; cached 5 minutes."""
+    try:
+        return odds.requests_remaining()
+    except Exception:
+        return None
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def games_in_window(sport, hours):
+    return odds.count_games(sport, hours)
+
+
+def load_cost(sport, hours, market=None):
+    """What loading would cost in Odds API requests, or None if we can't tell."""
+    try:
+        return odds.estimate_cost(sport, hours, market, count=games_in_window)
+    except Exception:
+        return None
+
+
+def show_cost(cost):
+    """Say what a load will cost. Returns True if you don't have enough requests left for it."""
+    if cost is None:
+        return False
+    left = quota_left()
+    if cost == 0:
+        st.caption("Already loaded today, so this is free.")
+    else:
+        extra = f" ({left} left this month)" if left is not None else ""
+        st.caption(f"This load will use about {cost} Odds API requests{extra}.")
+    return left is not None and cost > left
+
+
+left = quota_left()
+if left is not None:
+    if left < 100:
+        st.warning(f"Only {left} Odds API requests left this month. Load sparingly.")
+    else:
+        st.caption(f"Odds API requests left this month: {left}")
+
+
+def props_dashboard(key, load_props, get_values, stat_label, load_label, cost):
     """Load FanDuel props, scan players' recent games, then filter and sort the results.
 
     NBA and NFL share this. They differ only in the function that loads props, the function
     that returns a player's recent stat values, and the label for the stat. `key` keeps each
     tab's results separate in session_state: Streamlit reruns the whole script on every click,
     so anything we want to keep between clicks has to live there.
+    cost() says how many Odds API requests loading would use, or None if unknown.
     Returns the loaded props table, or None if nothing is loaded yet.
     """
-    if st.button(load_label, key=f"{key}_load"):
+    too_expensive = show_cost(cost())
+    if st.button(load_label, key=f"{key}_load", disabled=too_expensive):
         try:
             st.session_state[f"{key}_props"] = load_props()
+            quota_left.clear()  # the balance just changed
         except Exception as e:
             st.error(f"Couldn't load props right now: {e}")
 
@@ -91,15 +137,17 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label):
     return props
 
 
-def game_lines_section(key, load_lines, get_team_games, pause):
+def game_lines_section(key, load_lines, get_team_games, pause, cost):
     """Moneylines, spreads and totals for the loaded games, plus each team's recent form.
 
     Form means: how often the team's last games would have won, covered today's spread, or gone
     over today's total. It's the same idea as the prop hit rates, using final scores only.
     """
-    if st.button("Load game lines", key=f"{key}_lines_load"):
+    too_expensive = show_cost(cost())
+    if st.button("Load game lines", key=f"{key}_lines_load", disabled=too_expensive):
         try:
             st.session_state[f"{key}_lines"] = load_lines()
+            quota_left.clear()  # the balance just changed
         except Exception as e:
             st.error(f"Couldn't load game lines right now: {e}")
 
@@ -170,15 +218,14 @@ with nba_tab:
         key="nba_market",
     )
     nba_column, nba_label = stats_nba.MARKETS[nba_market]
-    st.caption("Loading uses about 1 Odds API request per game today for the chosen prop type "
-               "(free plan: ~500/month), then it's cached for the day. Player stats are shared by "
-               "all prop types, so switching type doesn't re-fetch them.")
+    st.caption("Player stats are shared by all prop types, so switching type doesn't re-fetch them.")
     props = props_dashboard(
         f"nba_{nba_market}",
         load_props=lambda: odds.get_todays_props(odds.NBA, nba_market, hours=24),
         get_values=lambda player: stats_nba.get_recent_values(player, nba_market),
         stat_label=nba_label,
         load_label=f"Load today's {nba_label} props",
+        cost=lambda: load_cost(odds.NBA, 24, nba_market),
     )
 
     if props is not None and not props.empty:
@@ -200,12 +247,12 @@ with nba_tab:
                     st.dataframe(analysis.hit_rates(logs, line, nba_column), hide_index=True)
 
     st.header("NBA moneylines, spreads and totals")
-    st.caption("Loading costs about 3 Odds API requests for every game at once, cached for the day.")
     game_lines_section(
         "nba",
         load_lines=lambda: odds.get_game_lines(odds.NBA, hours=24),
         get_team_games=stats_nba.get_team_games,
         pause=0,  # stats_nba already spaces its calls to respect the rate limit
+        cost=lambda: load_cost(odds.NBA, 24),
     )
 
 with nfl_tab:
@@ -213,9 +260,7 @@ with nfl_tab:
     market = st.selectbox(
         "Prop type", list(stats_nfl.MARKETS), format_func=lambda m: stats_nfl.MARKETS[m][1].title()
     )
-    st.caption("Loading uses about 1 Odds API request per game this week (roughly 14-16) for the "
-               "chosen prop type, then it's cached for the day. Load one prop type at a time to "
-               "stay inside the free plan's ~500/month.")
+    st.caption("Each prop type is loaded separately. Load one at a time to stay inside the free plan.")
     stat_label = stats_nfl.MARKETS[market][1]
     props_dashboard(
         f"nfl_{market}",
@@ -223,13 +268,14 @@ with nfl_tab:
         get_values=lambda player: stats_nfl.get_recent_values(player, market),
         stat_label=stat_label,
         load_label=f"Load this week's {stat_label} props",
+        cost=lambda: load_cost(odds.NFL, 24 * 7, market),
     )
 
     st.header("NFL moneylines, spreads and totals")
-    st.caption("Loading costs about 3 Odds API requests for every game this week at once, cached for the day.")
     game_lines_section(
         "nfl",
         load_lines=lambda: odds.get_game_lines(odds.NFL, hours=24 * 7),
         get_team_games=stats_nfl.get_team_games,
         pause=0,  # results come from one downloaded file
+        cost=lambda: load_cost(odds.NFL, 24 * 7),
     )
