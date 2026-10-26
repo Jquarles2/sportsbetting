@@ -135,3 +135,29 @@ def test_free_calls_and_cost_estimates(tmp_path, monkeypatch):
 def test_remaining_is_none_when_header_missing(monkeypatch):
     monkeypatch.setattr(odds, "_get", lambda path, params: ([], None))
     assert odds.requests_remaining() is None
+
+
+def test_game_lines_window_is_applied_when_reading_and_started_games_are_dropped(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    def at(hours):
+        return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    games = {"started": at(-1), "tonight": at(3), "sunday": at(30)}
+    events = [{**game_json(), "id": name, "commence_time": when, "home_team": f"{name} home",
+               "away_team": f"{name} away"} for name, when in games.items()]
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    calls = []
+    monkeypatch.setattr(odds, "_get", lambda path, params: calls.append(path) or (events, "400"))
+    for e in events:  # parse_game_lines matches outcome names to the home team, so give each its own
+        for m in e["bookmakers"][0]["markets"]:
+            for o in m["outcomes"]:
+                o["name"] = {"Boston Celtics": e["home_team"], "New York Knicks": e["away_team"]}.get(o["name"], o["name"])
+
+    def games_in(**kw):
+        return [g.split(" @ ")[1].split(" ")[0] for g in odds.get_game_lines(odds.NFL, **kw)[0]["GAME"]]
+
+    assert games_in(hours=24) == ["tonight"]                          # not the one that started, not Sunday's
+    assert games_in(hours=48) == ["tonight", "sunday"]                # a wider window reuses the cache
+    assert games_in(hours=24, include_started=True) == ["started", "tonight"]
+    assert len(calls) == 1                                            # one fetch served all three

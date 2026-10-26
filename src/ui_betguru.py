@@ -12,7 +12,7 @@ from src.ui_common import load_cost, quota_left, show_cost
 # What differs between sports: where the lines come from, how far ahead to look, and where each
 # team's recent games, injuries and final scores come from. NBA injuries aren't wired up yet.
 SPORTS = {
-    "NFL": {"code": "nfl", "odds": odds.NFL, "hours": 24 * 7, "team_games": stats_nfl.get_team_games,
+    "NFL": {"code": "nfl", "odds": odds.NFL, "hours": 24, "team_games": stats_nfl.get_team_games,
             "injuries": stats_nfl.get_team_injuries, "player_team": stats_nfl.get_player_team,
             "get_final": stats_nfl.get_final, "pause": 0},
     "NBA": {"code": "nba", "odds": odds.NBA, "hours": 24, "team_games": stats_nba.get_team_games,
@@ -211,6 +211,7 @@ def render_betguru():
     risk = left.select_slider("Risk level", options=list(guru.PROFILES), value="Balanced", key="bg_risk")
     n_legs = right.slider("Legs", 2, 6, 3, key="bg_legs")
     st.caption(guru.PROFILES[risk]["blurb"])
+    st.caption("The slate is today's games: those starting in the next 24 hours that haven't kicked off yet.")
 
     too_expensive = show_cost(load_cost(cfg["odds"], cfg["hours"]))
     if st.button(f"Build today's {sport_label} slate", key=f"{key}_build", disabled=too_expensive):

@@ -62,7 +62,9 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   and the shared `props_dashboard` / `game_lines_section` for the props tabs.
 - `src/ui_betguru.py`: the BetGuru tab (slate, parlay, game talks, no-bet list, model and record).
 - `src/ui_common.py`: Odds API quota and "this will cost N requests" helpers (Streamlit-cached).
-- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates)
+- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates). Game lines cache every
+  upcoming game and apply the time window when reading (`hours`, and started games are dropped unless
+  `include_started`); the BetGuru slate is "next 24 hours, not yet started" for both sports.
 - `src/stats_nba.py`: balldontlie (game logs, team games, final scores, injuries). Props markets map:
   points/rebounds/assists/threes/PRA.
 - `src/stats_nfl.py`: nflverse (weekly stats, team results, finals, injuries, matchups).

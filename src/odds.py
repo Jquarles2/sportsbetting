@@ -44,10 +44,18 @@ def lines_cache_key(sport):
     return f"odds_{sport}_lines_{BOOKMAKER}"
 
 
-def _starts_soon(event, hours):
-    start = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+def _in_window(start_iso, hours, grace_hours=4):
+    """True if a game starting at start_iso (like '2026-10-26T01:15:00Z') is within the window.
+
+    The window runs from `grace_hours` ago (so a game that just tipped off still counts) to `hours` ahead.
+    """
+    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
-    return now - timedelta(hours=4) < start < now + timedelta(hours=hours)
+    return now - timedelta(hours=grace_hours) < start < now + timedelta(hours=hours)
+
+
+def _starts_soon(event, hours):
+    return _in_window(event["commence_time"], hours)
 
 
 def parse_event_props(event, odds, market="player_points"):
@@ -127,10 +135,13 @@ def parse_game_lines(event):
     return row
 
 
-def get_game_lines(sport=NBA, hours=24):
+def get_game_lines(sport=NBA, hours=24, include_started=False):
     """Return (DataFrame of moneyline/spread/total per game, requests_remaining).
 
-    One call covers every game, but it costs 1 request per market (3 here). Cached for the day.
+    One call covers every game, but it costs 1 request per market (3 here). Every upcoming game is
+    cached for the day, and the time window is applied when reading, so asking for a different window
+    never costs requests. Games that have already started are left out unless include_started is set:
+    their pre-game lines can't be bet anymore.
     """
     cache_key = lines_cache_key(sport)
     cached = cache.get(cache_key)
@@ -139,11 +150,13 @@ def get_game_lines(sport=NBA, hours=24):
             f"/sports/{sport}/odds",
             {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
         )
-        rows = [parse_game_lines(e) for e in events if _starts_soon(e, hours)]
+        rows = [parse_game_lines(e) for e in events]  # keep them all; the window is applied below
         cached = {"rows": [r for r in rows if r], "remaining": remaining}
         cache.put(cache_key, cached)
 
-    df = pd.DataFrame(cached["rows"], columns=LINE_COLUMNS)
+    grace = 4 if include_started else 0
+    rows = [r for r in cached["rows"] if _in_window(r["START"], hours, grace)]
+    df = pd.DataFrame(rows, columns=LINE_COLUMNS)
     return df.sort_values("START").reset_index(drop=True), cached["remaining"]
 
 
