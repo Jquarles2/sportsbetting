@@ -34,9 +34,12 @@ labelled "don't trust this" number. Never switch the headline back to model chan
 - AI: Anthropic API, `claude-haiku-5-5`, via `src/claude.py` (write-ups and game talks)
 - Math: numpy only. Bayesian optimization is our own small GP + expected-improvement in `src/bayes.py`
   (scikit-learn is not installed).
-- Storage: SQLite. `data/cache.db` = daily cache (`src/cache.py`, one JSON blob per key per day).
-  `data/state.db` = your no-bet list and the results log (`src/nobet.py`, `src/results.py`).
-  Both are git-ignored and **wiped when Streamlit Cloud restarts** (see Next steps).
+- Storage (`src/store.py`): Supabase when `SUPABASE_URL` + `SUPABASE_KEY` are in secrets (plain REST over
+  `requests`, tables from `docs/supabase_setup.sql`, RLS on, used with the secret/service_role key),
+  otherwise a local SQLite file `data/state.db` (wiped on Streamlit Cloud restarts). It holds the no-bet list
+  (`src/nobet.py`), the results log (`src/results.py`) and a durable copy of Odds API answers (`odds_*` keys).
+  `data/cache.db` (`src/cache.py`) is the always-local daily cache; only `odds_*` keys are mirrored to
+  Supabase, with a 60 s in-memory "miss" memo so page clicks stay fast.
 - Secrets: `.streamlit/secrets.toml` (git-ignored; example file committed). Never commit keys.
   Names: `ODDS_API_KEY`, `BALLDONTLIE_API_KEY`, `ANTHROPIC_API_KEY`.
 
@@ -70,12 +73,15 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   Bayesian optimization of the model settings. Writes `data/model_nfl.json` (committed).
 - `src/guru.py`: legs, flags, no-bet list, parlay builder (Safe / Balanced / Aggressive).
 - `src/talks.py`, `src/writeups.py`, `src/claude.py`: Claude-written game talks and pick write-ups.
-- `src/results.py`, `src/nobet.py`: results log + grading + calibration; your no-bet list.
+- `src/store.py`: storage backends (SQLiteStore, SupabaseStore) and `get_store()`. All persistence goes
+  through it. `src/results.py`, `src/nobet.py`: results log + grading + calibration; your no-bet list.
 - `tests/`: pytest. `tests/test_app.py` runs the real app headlessly (Streamlit `AppTest`) with fakes.
+  `tests/fake_supabase.py` imitates Supabase's REST API; `tests/test_store.py` runs the same contract
+  tests against both backends.
 
 ## Commands
 - Run: `streamlit run app.py`
-- Tests: `python -m pytest` (≈95 tests, no network needed)
+- Tests: `python -m pytest` (≈125 tests, no network needed)
 - Retrain the NFL model: `python scripts/train_weights.py` (needs network, ~1 min), commit the JSON.
 
 ## Workflow notes
@@ -91,12 +97,15 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   on the deployed app). NBA injuries (`/player_injuries`) and NBA finals (`stats_nba.get_final`, used for
   grading) were written from the docs and never run against a real key. Failures degrade quietly.
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built.
-- The no-bet list and results log live in `data/state.db`: shared by all visitors, lost on restart.
+- Supabase is tested only against our fake (`tests/fake_supabase.py`), never a real project, until the owner
+  connects one. The in-app "Check storage connection" button reports real problems in plain words.
+  If storage is down, BetGuru refuses to build a parlay (it can't tell what your no-bet list excludes).
+- The no-bet list and record are shared by everyone who opens the app (no per-user accounts).
 - Phone layout is only what Streamlit gives by default (owner marked it low priority).
 
 ## Next steps (suggested order)
-1. Durable storage (e.g. Supabase/Turso) for the no-bet list and results log, so the record survives restarts.
-2. Morning pre-warm job + line-movement snapshots (line movement needs stored history).
+1. Owner connects Supabase (README steps) and confirms "Check storage connection" works; fix anything real.
+2. Morning pre-warm job + line-movement snapshots (history can now live in Supabase).
 3. Verify NBA calls live; add NBA team injuries and opponent-defense matchups.
 4. Once there are ≥100 graded legs per sport, retrain/recalibrate on the live record (extend
    `train_weights.py` to read `picks_log`), and show calibration over time.

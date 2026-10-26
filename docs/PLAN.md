@@ -21,11 +21,13 @@ Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carrie
    - no-bet list: automatic (QB out, thin data, blowout spreads) plus your own
    - results log that grades parlays and shows a calibration table
    - rebrand to BetGuru with BetGuru / NBA props / NFL props tabs
+10. **Durable storage** (Supabase): no-bet list, results record and Odds API answers survive restarts;
+    local SQLite fallback when Supabase isn't configured; "Check storage connection" in the app.
 
 ## Next
 
-1. **Durable storage** (Supabase or Turso) for the no-bet list and results record.
-2. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots).
+1. Connect a real Supabase project and verify it live (code is tested against a fake only).
+2. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots, now possible in Supabase).
 3. **Verify NBA live**: `/player_injuries` and `/games` (team games, finals) were written from docs.
    Then NBA team injury flags and opponent-defense matchups.
 4. **Learn from the live record**: retrain/recalibrate once there are ≥100 graded legs per sport.

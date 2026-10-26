@@ -6,7 +6,7 @@ is saved in st.session_state and everything else is recomputed instantly from it
 import pandas as pd
 import streamlit as st
 
-from src import games, guru, nobet, odds, ratings, results, stats_nba, stats_nfl, talks
+from src import games, guru, nobet, odds, ratings, results, stats_nba, stats_nfl, store, talks
 from src.ui_common import load_cost, quota_left, show_cost
 
 # What differs between sports: where the lines come from, how far ahead to look, and where each
@@ -19,6 +19,22 @@ SPORTS = {
             "injuries": None, "player_team": None, "get_final": stats_nba.get_final, "pause": 0},
 }
 FINALS = {cfg["code"]: cfg["get_final"] for cfg in SPORTS.values()}
+
+
+def show_storage(where):
+    """Say where your no-bet list and record are saved, with a button to test the connection."""
+    db = store.get_store()
+    if db.durable:
+        st.success(f"Your no-bet list and record are saved in {db.name}.")
+    else:
+        st.warning(f"Your no-bet list and record are saved in {db.name}. Connect Supabase (see the README) "
+                   "to keep them for good.")
+    if st.button("Check storage connection", key=f"bg_check_{where}"):
+        try:
+            db.check()
+            st.success("Storage works.")
+        except store.StoreError as e:
+            st.error(str(e))
 
 
 def build_slate(cfg):
@@ -59,8 +75,11 @@ def show_parlay(code, risk, parlay):
                "disagreements aren't real edge. BetGuru can't promise a winner; it avoids legs it doesn't "
                "trust and shows you the real math.")
     if st.button("Save this parlay to my record", key=f"bg_{code}_save"):
-        results.log_parlay(code, risk, legs)
-        st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
+        try:
+            results.log_parlay(code, risk, legs)
+            st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
+        except store.StoreError as e:
+            st.error(f"Couldn't save the parlay: {e}")
 
 
 def show_talks(key, state, params):
@@ -105,6 +124,7 @@ def show_no_bets(state, legs_teams):
     st.caption("Teams, players or games you never want in a parlay. A player blocks his team's game. "
                "Players on your list are also hidden from the player-props 5/5 parlays. The list is "
                "shared by everyone using this app and can reset when the app restarts.")
+    show_storage("nobet")
     kind = st.radio("Add a", list(nobet.KINDS), horizontal=True, key="bg_nb_kind")
     if kind == "team":
         value = st.selectbox("Team", legs_teams, key="bg_nb_team")
@@ -112,14 +132,17 @@ def show_no_bets(state, legs_teams):
         value = st.selectbox("Game", list(lines["GAME"]), key="bg_nb_game")
     else:
         value = st.text_input("Player name", placeholder="e.g. Patrick Mahomes", key="bg_nb_player")
-    if st.button("Add to my list", key="bg_nb_add") and nobet.add(kind, value or ""):
-        st.rerun()
-    for item_kind, name in nobet.list_items():
-        left, right = st.columns([4, 1])
-        left.write(f"**{item_kind.title()}:** {name}")
-        if right.button("Remove", key=f"bg_nb_rm_{item_kind}_{name}"):
-            nobet.remove(item_kind, name)
+    try:
+        if st.button("Add to my list", key="bg_nb_add") and nobet.add(kind, value or ""):
             st.rerun()
+        for item_kind, name in nobet.list_items():
+            left, right = st.columns([4, 1])
+            left.write(f"**{item_kind.title()}:** {name}")
+            if right.button("Remove", key=f"bg_nb_rm_{item_kind}_{name}"):
+                nobet.remove(item_kind, name)
+                st.rerun()
+    except store.StoreError as e:
+        st.error(f"Couldn't update your no-bet list: {e}")
 
 
 def show_model(code):
@@ -155,20 +178,26 @@ def show_model(code):
     st.subheader("Record")
     st.caption("Every parlay you save is graded against the final scores. The calibration table shows "
                "whether legs the model rated, say, 60-70% really won that often.")
+    show_storage("record")
     if st.button("Grade finished games", key=f"bg_{code}_grade"):
         try:
             n = results.grade_pending(lambda sport, home, away, start: FINALS[sport](home, away, start))
             st.success(f"Graded {n} legs.")
-        except Exception as e:
+        except Exception as e:  # network, storage or API trouble
             st.error(f"Couldn't grade right now: {e}")
-    pr = results.parlay_record()
+    try:
+        pr = results.parlay_record()
+        rec = results.record()
+        calibration = results.calibration()
+    except store.StoreError as e:
+        st.error(f"Couldn't load your record: {e}")
+        return
     st.write(f"Parlays: {pr['won']} won, {pr['lost']} lost, {pr['pending']} waiting.")
-    rec = results.record()
     if rec.empty:
         st.caption("No graded legs yet. Save a parlay and grade it after the games finish.")
     else:
         st.dataframe(rec, hide_index=True)
-        st.dataframe(results.calibration(), hide_index=True)
+        st.dataframe(calibration, hide_index=True)
 
 
 def render_betguru():
@@ -204,8 +233,15 @@ def render_betguru():
 
     params = ratings.load_params(code)
     teams = sorted(set(state["lines"]["HOME"]) | set(state["lines"]["AWAY"]))
+    try:
+        my_list = nobet.list_items()
+    except store.StoreError as e:
+        # Without your list we might include something you excluded, so don't build a parlay at all.
+        st.error(f"Couldn't load your no-bet list, so BetGuru won't build a parlay right now: {e}")
+        show_storage("error")
+        return
     legs = guru.build_legs(state["lines"], state["form"], params, state["flags"], code)
-    legs = guru.apply_user_list(legs, nobet.list_items(), cfg["player_team"])
+    legs = guru.apply_user_list(legs, my_list, cfg["player_team"])
     parlay = guru.build_parlay(legs, risk, n_legs)
 
     parlay_tab, talks_tab, nobet_tab, model_tab = st.tabs(

@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import pytest
 
-from src import cache, nobet, results, stats_nba, stats_nfl, talks
+from src import cache, results, stats_nba, stats_nfl, store, talks
 
 START = "2026-01-01T18:00:00Z"
 LATER = datetime(2026, 1, 2, tzinfo=timezone.utc)
@@ -11,7 +11,7 @@ LATER = datetime(2026, 1, 2, tzinfo=timezone.utc)
 
 @pytest.fixture(autouse=True)
 def temp_db(tmp_path, monkeypatch):
-    monkeypatch.setattr(results, "DB_PATH", tmp_path / "state.db")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "state.db")
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
 
 
