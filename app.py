@@ -38,11 +38,11 @@ if "props" in st.session_state:
     if props.empty:
         st.info("No player-points props posted yet for games in the next 24 hours.")
     else:
-        with st.expander("All lines by sportsbook"):
+        with st.expander("FanDuel lines"):
             st.dataframe(props, hide_index=True)
 
         st.header("Props dashboard")
-        st.caption("Scans every player's recent games against their median line. First run takes a few "
+        st.caption("Scans every player's recent games against FanDuel's line. First run takes a few "
                    "minutes; game logs are then cached for the day, and filters below cost nothing.")
         if st.button("Scan players"):
             bar = st.progress(0.0, text="Scanning players...")

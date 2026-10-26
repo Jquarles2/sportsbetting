@@ -14,7 +14,8 @@ from src.config import get_secret
 BASE_URL = "https://api.the-odds-api.com/v4"
 SPORT = "basketball_nba"
 MARKET = "player_points"
-CACHE_KEY = "odds_nba_player_points"
+BOOKMAKER = "fanduel"  # the only book we use
+CACHE_KEY = f"odds_nba_player_points_{BOOKMAKER}"
 COLUMNS = ["PLAYER", "GAME", "BOOK", "LINE", "OVER", "UNDER", "START"]
 
 
@@ -70,7 +71,7 @@ def get_todays_props():
             try:
                 odds, remaining = _get(
                     f"/sports/{SPORT}/events/{event['id']}/odds",
-                    {"regions": "us", "markets": MARKET, "oddsFormat": "american"},
+                    {"bookmakers": BOOKMAKER, "markets": MARKET, "oddsFormat": "american"},
                 )
             except requests.HTTPError as e:
                 if e.response is not None and e.response.status_code in (404, 422):
