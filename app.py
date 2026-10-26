@@ -38,32 +38,52 @@ if "props" in st.session_state:
     if props.empty:
         st.info("No player-points props posted yet for games in the next 24 hours.")
     else:
-        st.dataframe(props, hide_index=True)
+        with st.expander("All lines by sportsbook"):
+            st.dataframe(props, hide_index=True)
 
-        st.header("Best 5/5 picks")
-        st.caption("Scans every player in the table for 'cleared the line in all of the last 5 games'. "
-                   "First run takes a few minutes; game logs are then cached for the day.")
-        if st.button("Find 5/5 picks"):
+        st.header("Props dashboard")
+        st.caption("Scans every player's recent games against their median line. First run takes a few "
+                   "minutes; game logs are then cached for the day, and filters below cost nothing.")
+        if st.button("Scan players"):
             bar = st.progress(0.0, text="Scanning players...")
-            found, errors = picks.find_picks(
+            st.session_state["scan"] = picks.scan_players(
                 props, progress=lambda done, total: bar.progress(done / total, text=f"{done}/{total} players")
             )
             bar.empty()
-            st.session_state["picks"] = (found, errors)
-        if "picks" in st.session_state:
-            found, errors = st.session_state["picks"]
+
+        if "scan" in st.session_state:
+            scan, errors = st.session_state["scan"]
+            if errors:
+                st.warning(f"{len(errors)} players couldn't be loaded, e.g. {errors[0]}")
+
+            left, right = st.columns(2)
+            side = left.radio("Side", ["Over", "Under"], horizontal=True)
+            window = right.selectbox("Sort and filter by", ["L5", "L10", "L20"], index=1)
+            min_rate = st.slider(f"Minimum {side.lower()} hit rate (%)", 0, 100, 60, step=5)
+            games = st.multiselect("Games", sorted(scan["GAME"].unique()))
+            search = st.text_input("Player contains")
+
+            table = analysis.props_table(scan, side)
+            table = table[table[window].fillna(0) >= min_rate]
+            if games:
+                table = table[table["GAME"].isin(games)]
+            if search:
+                table = table[table["PLAYER"].str.contains(search, case=False)]
+            table = table.sort_values(window, ascending=False).reset_index(drop=True)
+            st.caption(f"{len(table)} props. L5/L10/L20 = % of last 5/10/20 games {side.lower()} the line. "
+                       "Click a column header to re-sort.")
+            st.dataframe(table, hide_index=True)
+
+            st.subheader("Best 5/5 parlay")
+            found = picks.find_picks(scan)
             if found.empty:
                 st.info("No player went 5/5 against today's lines.")
             else:
                 st.dataframe(found, hide_index=True)
-                legs = found.head(5)
-                st.subheader("Best 5/5 parlay")
-                for _, leg in legs.iterrows():
+                for _, leg in found.head(5).iterrows():
                     st.write(f"**{leg['PLAYER']}** {leg['SIDE']} {leg['LINE']} points ({leg['GAME']})")
-                st.caption("Picks with the biggest cushion over/under the line. Past games don't "
-                           "guarantee anything, and every extra leg makes a parlay harder to hit.")
-            if errors:
-                st.warning(f"{len(errors)} players couldn't be loaded, e.g. {errors[0]}")
+                st.caption("Top 5 by cushion over/under the line. Past games don't guarantee anything, "
+                           "and every extra leg makes a parlay harder to hit.")
 
         st.header("Hit rates")
         st.caption("Uses 2 balldontlie requests per new player (free plan: 5/minute).")

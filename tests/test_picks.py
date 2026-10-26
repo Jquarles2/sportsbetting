@@ -13,7 +13,7 @@ def test_five_of_five_over_under_and_miss():
     assert picks.five_of_five("A", "g", 20.5, [25, 22, 30]) is None  # too few games
 
 
-def test_find_picks_sorts_by_cushion_and_collects_errors(monkeypatch):
+def test_scan_and_find_picks(monkeypatch):
     props = pd.DataFrame({
         "PLAYER": ["Hot", "Hot", "Safe", "Cold", "Broken"],
         "GAME": ["x"] * 5,
@@ -28,6 +28,8 @@ def test_find_picks_sorts_by_cushion_and_collects_errors(monkeypatch):
 
     monkeypatch.setattr(stats_nba, "get_game_logs", fake_logs)
     seen = []
-    df, errors = picks.find_picks(props, progress=lambda d, t: seen.append((d, t)), pause=0)
-    assert list(df["PLAYER"]) == ["Safe", "Hot"]  # Hot's median line is 21.0 -> cushion 4
+    scan, errors = picks.scan_players(props, progress=lambda d, t: seen.append((d, t)), pause=0)
     assert errors == ["Broken: boom"] and seen[-1] == (4, 4)
+    assert scan.set_index("PLAYER").loc["Hot", "LINE"] == 21.0  # median of the two books
+    # Hot's cushion is 4, Safe's 19.5; Cold isn't 5/5.
+    assert list(picks.find_picks(scan)["PLAYER"]) == ["Safe", "Hot"]

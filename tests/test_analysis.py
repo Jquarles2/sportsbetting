@@ -34,3 +34,14 @@ def test_fewer_games_than_window_and_empty():
     assert out.loc["Last 20", "GAMES"] == 3
     empty = analysis.hit_rates(pd.DataFrame(columns=["PTS", "HOME_AWAY"]), 20.5)
     assert empty["HIT_RATE"].isna().all()
+
+
+def test_rate_and_props_table():
+    pts = [30, 30, 10, 10, 30]
+    assert analysis.rate(pts, 20.5, 5) == 60.0
+    assert analysis.rate(pts, 20.5, 5, "Under") == 40.0
+    assert analysis.rate(pts, 20.5, 2) == 100.0
+    assert analysis.rate([], 20.5, 5) is None
+    scan = pd.DataFrame({"PLAYER": ["A"], "GAME": ["x"], "LINE": [20.5], "PTS": [pts]})
+    row = analysis.props_table(scan).iloc[0]
+    assert (row["L5"], row["L10"], row["L20"]) == (60.0, 60.0, 60.0)

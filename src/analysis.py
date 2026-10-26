@@ -23,3 +23,25 @@ def hit_rates(logs, line):
     for side in ("Home", "Away"):
         rows.append(_row(f"{side} (last 20)", last20[last20["HOME_AWAY"] == side], line))
     return pd.DataFrame(rows, columns=COLUMNS)
+
+
+def rate(pts, line, n, side="Over"):
+    """Percent of the last n games (pts is newest first) that went over (or under) the line.
+
+    Uses fewer games if the player has fewer than n. None if there are no games.
+    """
+    games = pts[:n]
+    if not games:
+        return None
+    hits = sum(p > line if side == "Over" else p < line for p in games)
+    return round(100 * hits / len(games), 1)
+
+
+def props_table(scan, side="Over"):
+    """One row per prop with hit rates over the last 5, 10 and 20 games."""
+    rows = [
+        {"PLAYER": r.PLAYER, "GAME": r.GAME, "LINE": r.LINE,
+         **{f"L{n}": rate(r.PTS, r.LINE, n, side) for n in WINDOWS}}
+        for r in scan.itertuples()
+    ]
+    return pd.DataFrame(rows, columns=["PLAYER", "GAME", "LINE", "L5", "L10", "L20"])
