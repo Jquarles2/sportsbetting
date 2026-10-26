@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src import odds, stats_nba
+from src import analysis, odds, stats_nba
 
 st.set_page_config(page_title="Props Research", page_icon="🏀")
 
@@ -27,12 +27,33 @@ st.header("Today's NBA points props")
 st.caption("Each load uses Odds API requests (free plan: ~500/month), so it's cached for the day.")
 if st.button("Load today's props"):
     try:
-        props, remaining = odds.get_todays_props()
+        # Keep results in session_state: Streamlit reruns the script on every click,
+        # so a plain variable would vanish when you pick a player below.
+        st.session_state["props"] = odds.get_todays_props()
     except Exception as e:
         st.error(f"Couldn't load props right now: {e}")
+
+if "props" in st.session_state:
+    props, remaining = st.session_state["props"]
+    if props.empty:
+        st.info("No player-points props posted yet for games in the next 24 hours.")
     else:
-        if props.empty:
-            st.info("No player-points props posted yet for games in the next 24 hours.")
-        else:
-            st.dataframe(props, hide_index=True)
-        st.caption(f"Odds API requests remaining this month: {remaining}")
+        st.dataframe(props, hide_index=True)
+
+        st.header("Hit rates")
+        st.caption("Uses 2 balldontlie requests per new player (free plan: 5/minute).")
+        player = st.selectbox("Player", sorted(props["PLAYER"].unique()))
+        player_lines = props[props["PLAYER"] == player]["LINE"].dropna()
+        default_line = float(player_lines.median()) if len(player_lines) else 20.5
+        line = st.number_input("Points line", value=default_line, step=0.5)
+        if st.button("Show hit rates"):
+            try:
+                logs = stats_nba.get_game_logs(player, n=20)
+            except Exception as e:
+                st.error(f"Couldn't load stats right now: {e}")
+            else:
+                if logs is None or logs.empty:
+                    st.warning(f"No game logs found for {player}.")
+                else:
+                    st.dataframe(analysis.hit_rates(logs, line), hide_index=True)
+    st.caption(f"Odds API requests remaining this month: {remaining}")
