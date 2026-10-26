@@ -8,7 +8,8 @@ so explain non-obvious code briefly and keep the code simple.
 ## Stack
 - Python 3.11+
 - Streamlit (UI and hosting on Streamlit Community Cloud)
-- Data: The Odds API (prop lines), nba_api (NBA stats), nfl_data_py (NFL stats)
+- Data: The Odds API (prop lines), balldontlie (NBA stats), nflverse weekly player stats, read directly as CSV (NFL stats; nfl_data_py is unmaintained and pins pandas<2)
+- AI: Anthropic API (claude-haiku-5-5) for pick write-ups
 - Storage: SQLite cache (data/cache.db); don't refetch data we already have today
 - Secrets: `.streamlit/secrets.toml` (git-ignored). Never commit API keys.
 

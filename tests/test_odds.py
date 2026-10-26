@@ -50,7 +50,7 @@ def test_get_todays_props_skips_far_future_games_and_caches(tmp_path, monkeypatc
 
 def test_get_todays_props_fetches_games_starting_soon(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_within_24h", lambda e: True)
+    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
 
     def fake_get(path, params):
         return ([event()], "499") if path.endswith("/events") else (props_json(), "498")
@@ -62,7 +62,7 @@ def test_get_todays_props_fetches_games_starting_soon(tmp_path, monkeypatch):
 
 def test_game_without_props_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_within_24h", lambda e: True)
+    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
 
     def fake_get(path, params):
         if path.endswith("/events"):
@@ -74,3 +74,34 @@ def test_game_without_props_is_skipped(tmp_path, monkeypatch):
     monkeypatch.setattr(odds, "_get", fake_get)
     df, _ = odds.get_todays_props()
     assert df.empty
+
+
+def game_json():
+    def outcomes(*items):
+        return [{"name": n, "price": pr, **({"point": pt} if pt is not None else {})} for n, pr, pt in items]
+    return {**event(), "bookmakers": [{"title": "FanDuel", "markets": [
+        {"key": "h2h", "outcomes": outcomes(("Boston Celtics", -180, None), ("New York Knicks", 150, None))},
+        {"key": "spreads", "outcomes": outcomes(("Boston Celtics", -110, -4.5), ("New York Knicks", -110, 4.5))},
+        {"key": "totals", "outcomes": outcomes(("Over", -105, 221.5), ("Under", -115, 221.5))},
+    ]}]}
+
+
+def test_parse_game_lines():
+    row = odds.parse_game_lines(game_json())
+    assert row["GAME"] == "New York Knicks @ Boston Celtics"
+    assert (row["ML_HOME"], row["ML_AWAY"]) == (-180, 150)
+    assert (row["SPREAD_HOME"], row["SPREAD_HOME_PRICE"], row["SPREAD_AWAY_PRICE"]) == (-4.5, -110, -110)
+    assert (row["TOTAL"], row["OVER"], row["UNDER"]) == (221.5, -105, -115)
+    assert odds.parse_game_lines({**event(), "bookmakers": []}) is None
+
+
+def test_get_game_lines_filters_by_time_and_caches(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    calls = []
+    monkeypatch.setattr(odds, "_get", lambda path, params: calls.append(path) or ([game_json()], "497"))
+    df, _ = odds.get_game_lines(odds.NBA, hours=24)
+    assert df.empty and list(df.columns) == odds.LINE_COLUMNS  # the sample game is in 2099
+    odds.get_game_lines(odds.NBA, hours=24)
+    assert len(calls) == 1
+    df, remaining = odds.get_game_lines(odds.NFL, hours=24 * 365 * 100)
+    assert len(df) == 1 and remaining == "497"
