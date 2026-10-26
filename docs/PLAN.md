@@ -1,16 +1,36 @@
 # Build plan
 
-Each step is roughly one Sonnet session. Use `/clear` between steps.
+Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carries the context.
 
-1. **Setup**: Python project, requirements.txt, a "hello" Streamlit page, .gitignore. (Haiku)
-2. **NBA stats**: given a player name, show their last 10 game logs. (Sonnet)
-3. **Odds**: get a free key from the-odds-api.com, then fetch today's NBA player-point props and cache them in SQLite. (Sonnet)
-4. **Hit rates**: for each prop, show how often the player went over the line in the last 5, 10 and 20 games, plus home/away splits. (Sonnet)
-5. **Dashboard**: a sortable table of today's props by hit rate, with filters. (Sonnet)
-6. **NFL**: repeat steps 2–5 with nfl_data_py. (Sonnet)
-7. **Deploy**: Streamlit Community Cloud, then share the link with friends. (Haiku)
-8. **Extras**: AI write-ups for each pick (Claude Haiku via the API), line-movement tracking, opponent defense rankings.
+## Done
 
-## Learning with REA (optional, step 8+)
+1. **Setup**: Python project, requirements.txt, Streamlit page, .gitignore.
+2. **NBA stats**: a player's last 10 game logs (balldontlie, since stats.nba.com blocks cloud hosts).
+3. **Odds**: FanDuel player props from The Odds API, cached in SQLite.
+4. **Hit rates**: over rates over the last 5/10/20 games, plus home/away splits.
+5. **Dashboard**: sortable, filterable props table, best 5/5 parlay.
+6. **NFL**: the same for NFL using nflverse data (read directly; `nfl_data_py` is unmaintained).
+6.5. **Game lines**: FanDuel moneylines, spreads and totals with each team's recent win/cover/over rates.
+7. **Deploy**: Streamlit Community Cloud guide in the README (the owner deploys from `main`).
+8. **Extras (part 1)**: AI write-ups with injury and matchup facts (Claude Haiku), Odds API usage guard,
+   NBA prop types (rebounds, assists, threes, PRA), balldontlie rate limiting.
+9. **BetGuru** (this was the investors' request):
+   - team-vs-team model, backtested on real NFL lines with Bayesian optimization
+   - parlay builder with Safe / Balanced / Aggressive risk and a leg count
+   - AI game talks
+   - no-bet list: automatic (QB out, thin data, blowout spreads) plus your own
+   - results log that grades parlays and shows a calibration table
+   - rebrand to BetGuru with BetGuru / NBA props / NFL props tabs
+
+## Next
+
+1. **Durable storage** (Supabase or Turso) for the no-bet list and results record.
+2. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots).
+3. **Verify NBA live**: `/player_injuries` and `/games` (team games, finals) were written from docs.
+   Then NBA team injury flags and opponent-defense matchups.
+4. **Learn from the live record**: retrain/recalibrate once there are ≥100 graded legs per sport.
+5. **Phone layout polish** (low priority).
+
+## Learning with REA (optional)
 Install it with `npx rea-agents setup` on your own machine. Point it at a competitor's public
 website to understand its UI and feature design, then build your own version on the data above.

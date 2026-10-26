@@ -1,0 +1,219 @@
+"""The BetGuru tab: today's slate, the parlay for your risk level, game talks, no-bet list, record.
+
+Streamlit reruns the whole script on every click, so anything slow (loading lines, scanning teams)
+is saved in st.session_state and everything else is recomputed instantly from it.
+"""
+import pandas as pd
+import streamlit as st
+
+from src import games, guru, nobet, odds, ratings, results, stats_nba, stats_nfl, talks
+from src.ui_common import load_cost, quota_left, show_cost
+
+# What differs between sports: where the lines come from, how far ahead to look, and where each
+# team's recent games, injuries and final scores come from. NBA injuries aren't wired up yet.
+SPORTS = {
+    "NFL": {"code": "nfl", "odds": odds.NFL, "hours": 24 * 7, "team_games": stats_nfl.get_team_games,
+            "injuries": stats_nfl.get_team_injuries, "player_team": stats_nfl.get_player_team,
+            "get_final": stats_nfl.get_final, "pause": 0},
+    "NBA": {"code": "nba", "odds": odds.NBA, "hours": 24, "team_games": stats_nba.get_team_games,
+            "injuries": None, "player_team": None, "get_final": stats_nba.get_final, "pause": 0},
+}
+FINALS = {cfg["code"]: cfg["get_final"] for cfg in SPORTS.values()}
+
+
+def build_slate(cfg):
+    """Load the lines, scan every team's recent games and check injuries. Saved by the caller."""
+    lines, remaining = odds.get_game_lines(cfg["odds"], hours=cfg["hours"])
+    quota_left.clear()  # the balance just changed
+    bar = st.progress(0.0, text="Scanning teams...")
+    form, errors = games.scan_teams(
+        lines, cfg["team_games"], pause=cfg["pause"],
+        progress=lambda done, total: bar.progress(done / total, text=f"{done}/{total} teams"),
+    )
+    bar.empty()
+    teams = sorted(set(lines["HOME"]) | set(lines["AWAY"]))
+    flags = guru.team_flags(teams, cfg["injuries"]) if cfg["injuries"] else {t: [] for t in teams}
+    return {"lines": lines, "form": form, "errors": errors, "flags": flags, "remaining": remaining}
+
+
+def show_parlay(code, risk, parlay):
+    if parlay["message"]:
+        st.info(parlay["message"])
+    legs = parlay["legs"]
+    if parlay["p_all"] is None:
+        return
+    a, b, c = st.columns(3)
+    a.metric("Chance every leg hits", f"{parlay['p_all']:.0%}")
+    b.metric("Pays (American odds)", f"{parlay['american']:+d}")
+    c.metric("Expected value per $100", f"{parlay['ev_per_100']:+.0f}")
+    for leg in legs.itertuples():
+        st.markdown(f"**{leg.PICK}** ({leg.PRICE:+.0f}, {leg.P:.0%}) - {leg.GAME}")
+        st.caption(leg.WHY)
+        for flag in leg.FLAGS:
+            st.caption(f"⚠️ {flag['reason']}")
+    st.caption("Expected value uses the model's own chances and the real prices. It is usually negative "
+               "because the sportsbook takes a cut on every leg, and it multiplies with each added leg. "
+               "BetGuru can't promise a winner; it avoids legs it doesn't trust and shows you the real math.")
+    if st.button("Save this parlay to my record", key=f"bg_{code}_save"):
+        results.log_parlay(code, risk, legs)
+        st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
+
+
+def show_talks(key, state, params):
+    lines, form, flags = state["lines"], state["form"], state["flags"]
+    talks_done = st.session_state.setdefault(f"{key}_talks", {})
+    st.caption("A short team-vs-team preview of each game, written by Claude from the lines, each team's "
+               "recent form and the injury report. It can only use those facts.")
+    if st.button("Write the game talks (Claude Haiku)", key=f"{key}_talks_btn"):
+        for g in lines.itertuples():
+            if g.HOME not in form or g.AWAY not in form:
+                continue
+            try:
+                talks_done[g.GAME] = talks.get_talk(g.GAME, talks.game_facts(g, form, params, flags))
+            except Exception as e:
+                st.error(f"Couldn't write the talks: {e}")
+                break
+    for g in lines.itertuples():
+        with st.expander(g.GAME):
+            if g.HOME not in form or g.AWAY not in form:
+                st.write("Not enough recent games for one of these teams, so BetGuru skips this game.")
+                continue
+            st.write(talks_done.get(g.GAME) or "Press the button above to write this talk.")
+            st.markdown("**What it's based on**")
+            st.markdown("\n".join(f"- {fact}" for fact in talks.game_facts(g, form, params, flags)))
+
+
+def show_no_bets(state, legs_teams):
+    lines, form, flags = state["lines"], state["form"], state["flags"]
+    st.subheader("BetGuru's no-bet list")
+    st.caption("Players and games BetGuru won't build a parlay around, and why. A quarterback who is "
+               "Out or Doubtful blocks his team's legs; other injured skill players add a caution; thin data "
+               "and blowout spreads are skipped.")
+    auto = guru.auto_no_bets(lines, form, flags, st.session_state["bg_code"])
+    if auto.empty:
+        st.success("Nothing flagged today.")
+    else:
+        st.dataframe(auto, hide_index=True)
+    if st.session_state["bg_code"] == "nba":
+        st.caption("NBA injury flags aren't wired up yet, so only data checks show for the NBA.")
+
+    st.subheader("Your no-bet list")
+    st.caption("Teams, players or games you never want in a parlay. A player blocks his team's game. "
+               "Players on your list are also hidden from the player-props 5/5 parlays. The list is "
+               "shared by everyone using this app and can reset when the app restarts.")
+    kind = st.radio("Add a", list(nobet.KINDS), horizontal=True, key="bg_nb_kind")
+    if kind == "team":
+        value = st.selectbox("Team", legs_teams, key="bg_nb_team")
+    elif kind == "game":
+        value = st.selectbox("Game", list(lines["GAME"]), key="bg_nb_game")
+    else:
+        value = st.text_input("Player name", placeholder="e.g. Patrick Mahomes", key="bg_nb_player")
+    if st.button("Add to my list", key="bg_nb_add") and nobet.add(kind, value or ""):
+        st.rerun()
+    for item_kind, name in nobet.list_items():
+        left, right = st.columns([4, 1])
+        left.write(f"**{item_kind.title()}:** {name}")
+        if right.button("Remove", key=f"bg_nb_rm_{item_kind}_{name}"):
+            nobet.remove(item_kind, name)
+            st.rerun()
+
+
+def show_model(code):
+    info = ratings.load_model_info(code)
+    st.subheader("How the model is doing")
+    if info:
+        val = info["metrics"]["validation"]
+        noise = info["accuracy_noise_pm"]["validation"]
+        st.caption(f"Tuned with Bayesian optimization on NFL seasons {info['trained_on']} using real "
+                   f"historical lines, then checked on {info['validated_on']} ({val['games']} games it never "
+                   f"saw). Break-even at -110 odds is 52.4% right.")
+        table = pd.DataFrame([
+            {"MARKET": "Spread", "RIGHT": f"{val['spread']['accuracy']:.1%} ± {noise:.1%}",
+             "ROI AT -110": f"{val['spread']['roi']:+.1%}", "LOG-LOSS": f"{val['spread']['logloss']:.4f}"},
+            {"MARKET": "Total", "RIGHT": f"{val['total']['accuracy']:.1%} ± {noise:.1%}",
+             "ROI AT -110": f"{val['total']['roi']:+.1%}", "LOG-LOSS": f"{val['total']['logloss']:.4f}"},
+            {"MARKET": "Moneyline", "RIGHT": f"{val['moneyline']['accuracy']:.1%}", "ROI AT -110": "n/a",
+             "LOG-LOSS": f"{val['moneyline']['logloss']:.4f} (market alone: {val['moneyline']['market_logloss']:.4f})"},
+        ])
+        st.dataframe(table, hide_index=True)
+        st.info("The honest read: recent team form adds almost nothing beyond what the betting lines already "
+                "price in. The optimizer shrank the model's tilts to near zero, so BetGuru's chances stay "
+                "close to the book's. Differences from 50% inside the ± range are noise. BetGuru's value is "
+                "discipline and transparency, not a secret edge.")
+        with st.expander("Tuned settings"):
+            st.json({k: round(v, 3) for k, v in info["params"].items()})
+    else:
+        st.warning("The NBA model hasn't been trained: there are no free historical NBA lines to test it on. "
+                   "It uses conservative settings that stay close to the market until its own saved "
+                   "results (below) give it something to learn from.")
+
+    st.subheader("Record")
+    st.caption("Every parlay you save is graded against the final scores. The calibration table shows "
+               "whether legs the model rated, say, 60-70% really won that often.")
+    if st.button("Grade finished games", key=f"bg_{code}_grade"):
+        try:
+            n = results.grade_pending(lambda sport, home, away, start: FINALS[sport](home, away, start))
+            st.success(f"Graded {n} legs.")
+        except Exception as e:
+            st.error(f"Couldn't grade right now: {e}")
+    pr = results.parlay_record()
+    st.write(f"Parlays: {pr['won']} won, {pr['lost']} lost, {pr['pending']} waiting.")
+    rec = results.record()
+    if rec.empty:
+        st.caption("No graded legs yet. Save a parlay and grade it after the games finish.")
+    else:
+        st.dataframe(rec, hide_index=True)
+        st.dataframe(results.calibration(), hide_index=True)
+
+
+def render_betguru():
+    sport_label = st.radio("Sport", list(SPORTS), horizontal=True, key="bg_sport")
+    cfg = SPORTS[sport_label]
+    code = cfg["code"]
+    st.session_state["bg_code"] = code
+    key = f"bg_{code}"
+
+    left, right = st.columns(2)
+    risk = left.select_slider("Risk level", options=list(guru.PROFILES), value="Balanced", key="bg_risk")
+    n_legs = right.slider("Legs", 2, 6, 3, key="bg_legs")
+    st.caption(guru.PROFILES[risk]["blurb"])
+
+    too_expensive = show_cost(load_cost(cfg["odds"], cfg["hours"]))
+    if st.button(f"Build today's {sport_label} slate", key=f"{key}_build", disabled=too_expensive):
+        try:
+            st.session_state[f"{key}_state"] = build_slate(cfg)
+        except Exception as e:
+            st.error(f"Couldn't build the slate right now: {e}")
+
+    state = st.session_state.get(f"{key}_state")
+    if state is None:
+        st.info("Press the button to load FanDuel's moneylines, spreads and totals, scan each team's recent "
+                "games and check injuries. Then BetGuru builds your parlay, writes game talks and shows "
+                "who is on the no-bet list.")
+        return
+    if state["lines"].empty:
+        st.info("No FanDuel game lines posted yet for this window.")
+        return
+    if state["errors"]:
+        st.warning(f"{len(state['errors'])} teams couldn't be loaded, e.g. {state['errors'][0]}")
+
+    params = ratings.load_params(code)
+    teams = sorted(set(state["lines"]["HOME"]) | set(state["lines"]["AWAY"]))
+    legs = guru.build_legs(state["lines"], state["form"], params, state["flags"], code)
+    legs = guru.apply_user_list(legs, nobet.list_items(), cfg["player_team"])
+    parlay = guru.build_parlay(legs, risk, n_legs)
+
+    parlay_tab, talks_tab, nobet_tab, model_tab = st.tabs(
+        ["Parlay", "Game talks", "No-bet list", "Model and record"])
+    with parlay_tab:
+        show_parlay(code, risk, parlay)
+        with st.expander("Every candidate leg"):
+            shown = legs.assign(P=(legs["P"] * 100).round(1), EDGE=(legs["EDGE"] * 100).round(1))
+            st.dataframe(shown[["PICK", "GAME", "PRICE", "P", "EDGE", "SEVERITY", "USER_REASON"]]
+                         .sort_values("P", ascending=False), hide_index=True)
+    with talks_tab:
+        show_talks(key, state, params)
+    with nobet_tab:
+        show_no_bets(state, teams)
+    with model_tab:
+        show_model(code)

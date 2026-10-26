@@ -1,45 +1,13 @@
 import streamlit as st
 
-from src import analysis, games, odds, picks, stats_nba, stats_nfl, writeups
+from src import analysis, games, nobet, odds, picks, stats_nba, stats_nfl, writeups
+from src.ui_betguru import render_betguru
+from src.ui_common import load_cost, quota_left, show_cost
 
-st.set_page_config(page_title="Props Research", page_icon="🏀")
+st.set_page_config(page_title="BetGuru", page_icon="🎯")
 
-st.title("Props Research")
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def quota_left():
-    """Odds API requests left this month, or None if we can't tell. Free to ask; cached 5 minutes."""
-    try:
-        return odds.requests_remaining()
-    except Exception:
-        return None
-
-
-@st.cache_data(ttl=300, show_spinner=False)
-def games_in_window(sport, hours):
-    return odds.count_games(sport, hours)
-
-
-def load_cost(sport, hours, market=None):
-    """What loading would cost in Odds API requests, or None if we can't tell."""
-    try:
-        return odds.estimate_cost(sport, hours, market, count=games_in_window)
-    except Exception:
-        return None
-
-
-def show_cost(cost):
-    """Say what a load will cost. Returns True if you don't have enough requests left for it."""
-    if cost is None:
-        return False
-    left = quota_left()
-    if cost == 0:
-        st.caption("Already loaded today, so this is free.")
-    else:
-        extra = f" ({left} left this month)" if left is not None else ""
-        st.caption(f"This load will use about {cost} Odds API requests{extra}.")
-    return left is not None and cost > left
+st.title("🎯 BetGuru")
+st.caption("Team-vs-team game talks, parlays and a no-bet list, plus the player-props research tools.")
 
 
 def facts_list(*facts):
@@ -120,6 +88,9 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label, cost, g
 
         st.subheader(f"Best 5/5 parlay: {stat_label}")
         found = picks.find_picks(scan)
+        blocked = nobet.names("player")  # players on your no-bet list never make a parlay
+        if blocked:
+            found = found[~found["PLAYER"].str.lower().isin(blocked)]
         if found.empty:
             st.info("No player went 5/5 against these lines.")
         else:
@@ -207,7 +178,10 @@ def game_lines_section(key, load_lines, get_team_games, pause, cost):
         st.dataframe(totals, hide_index=True)
 
 
-nba_tab, nfl_tab = st.tabs(["🏀 NBA", "🏈 NFL"])
+guru_tab, nba_tab, nfl_tab = st.tabs(["🎯 BetGuru", "🏀 NBA props", "🏈 NFL props"])
+
+with guru_tab:
+    render_betguru()
 
 with nba_tab:
     st.header("NBA game logs")
