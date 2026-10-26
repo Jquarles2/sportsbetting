@@ -16,9 +16,15 @@ Backtests on 14 seasons of real NFL historical lines (`scripts/train_weights.py`
 form adds **no reliable edge** over the market: spread ~50%, totals ~50–53% (break-even at -110 is
 52.4%; ±4% is noise on the validation set). Bayesian optimization shrank the model's tilts to ~0, so
 its probabilities track the book's. The NBA has no free historical lines, so it is **untrained** and uses
-conservative settings. BetGuru's value is discipline (skip untrusted legs, one leg per game, real EV
+zero tilt (its chances are exactly the book's). BetGuru's value is discipline (skip untrusted legs, one leg per game, real EV
 math, a graded record), not a secret edge. Never write copy that promises winners or profit; parlay EV
-is usually negative because of the vig. Keep the "How the model is doing" panel honest.
+is always negative because of the vig. Keep the "How the model is doing" panel honest.
+
+**Winner's curse (learned the hard way):** an early NBA version with small non-zero tilts showed a
+"+16 EV" Aggressive parlay in the live app, because ranking legs by model-vs-book disagreement selects
+the model's biggest errors. So the headline EV (`ev_per_100`) is computed from the book's own no-vig
+chances (`P_MARKET`) and can never be positive; the model-based EV (`ev_model_per_100`) is shown only as a
+labelled "don't trust this" number. Never switch the headline back to model chances.
 
 ## Stack
 - Python 3.11+ (dev box runs 3.13), Streamlit (UI + hosting on Streamlit Community Cloud, deploys `main`)
@@ -81,8 +87,9 @@ is usually negative because of the vig. Keep the "How the model is doing" panel 
   `st.session_state`, and give every widget a unique `key`.
 
 ## Known gaps and unverified-live items
-- NBA injuries (`stats_nba.get_injury`, balldontlie `/player_injuries`) were written from the docs and
-  never run against a real key. NBA team games / finals (`/games`) likewise. Failures degrade quietly.
+- NBA team games (`stats_nba.get_team_games`, balldontlie `/games`) are verified live (the NBA slate built
+  on the deployed app). NBA injuries (`/player_injuries`) and NBA finals (`stats_nba.get_final`, used for
+  grading) were written from the docs and never run against a real key. Failures degrade quietly.
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built.
 - The no-bet list and results log live in `data/state.db`: shared by all visitors, lost on restart.
 - Phone layout is only what Streamlit gives by default (owner marked it low priority).

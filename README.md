@@ -8,8 +8,8 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 - Loads FanDuel moneylines, spreads and totals for today's games (NBA) or this week's (NFL).
 - Scans each team's recent games and, for the NFL, the weekly injury report.
 - **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive) and a leg count. One leg per
-  game, never a leg it doesn't trust, and the real expected value shown (usually negative: the
-  sportsbook takes a cut on every leg).
+  game, never a leg it doesn't trust, and the expected value at fair odds shown (always negative: the
+  sportsbook takes a cut on every leg, and the cut multiplies with each leg).
 - **Game talks**: a short Claude-written preview of each game, using only the facts it is given.
 - **No-bet list**: BetGuru's own (a quarterback who is Out or Doubtful, thin data, blowout spreads)
   plus **your own** teams, players and games.
