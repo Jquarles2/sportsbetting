@@ -257,3 +257,30 @@ def get_final(home, away, start):
                 and g["visitor_team"]["full_name"] == away):
             return g["home_team_score"], g["visitor_team_score"]
     return None
+
+
+DID_NOT_PLAY = "dnp"  # a finished game where the player didn't play (sportsbooks void these props)
+
+
+def get_player_stat(name, market, home, away, start):
+    """A player's value of the market's stat in one finished NBA game.
+
+    Returns an int, DID_NOT_PLAY if there's no stat line with minutes for him in that game, or None if
+    we can't identify the player or the teams (so the leg stays waiting instead of being voided wrongly).
+    """
+    column = MARKETS[market][0]
+    player = find_player(name)
+    team_ids = {t["full_name"]: t["id"] for t in _teams()}
+    if player is None or home not in team_ids or away not in team_ids:
+        return None
+    dates = [(start - timedelta(days=d)).date().isoformat() for d in (0, 1)]
+    data = _get("/stats", {"player_ids[]": player["id"], "dates[]": dates, "per_page": 100})["data"]
+    for stat in data:
+        game = stat["game"]
+        if game["home_team_id"] == team_ids[home] and game["visitor_team_id"] == team_ids[away]:
+            if not stat.get("min"):
+                return DID_NOT_PLAY
+            row = _to_row(stat)
+            row["PRA"] = row["PTS"] + row["REB"] + row["AST"]
+            return int(row[column])
+    return DID_NOT_PLAY

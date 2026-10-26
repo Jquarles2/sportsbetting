@@ -140,3 +140,88 @@ def test_game_facts_and_talk_caching():
     talks.get_talk("Owls @ Hawks", facts + ["Injury report, Hawks: X (WR) Out."], client=client)
     assert len(calls) == 2  # a new fact means a new talk
     assert calls[0]["model"] == "claude-haiku-5-5" and "ONLY the facts" in calls[0]["system"]
+
+
+def prop_leg(pick, line, p=0.6, player="Wide Out", market="Prop:player_reception_yds"):
+    return pd.DataFrame([("Owls @ Hawks", START, market, pick, None, line, -110, p, player)],
+                        columns=["GAME", "START", "MARKET", "PICK", "TEAM", "LINE", "PRICE", "P", "PLAYER"])
+
+
+def test_prop_grading_rules():
+    assert results.grade_prop("Wide Out Over 60.5 receiving yards", 60.5, 80) == "win"
+    assert results.grade_prop("Wide Out Over 60.5 receiving yards", 60.5, 60) == "loss"
+    assert results.grade_prop("Wide Out Under 60.5 receiving yards", 60.5, 60) == "win"
+    assert results.grade_prop("Wide Out Over 60 receiving yards", 60.0, 60) == "push"
+    assert results.grade_prop("Wide Out Over 60.5 receiving yards", 60.5, results.DID_NOT_PLAY) == "push"
+
+
+def test_prop_legs_are_logged_with_the_player_and_graded_from_the_stat_line():
+    results.log_parlay("nfl", "Balanced", pd.concat([prop_leg("Wide Out Over 60.5 receiving yards", 60.5),
+                                                       prop_leg("Run Back Under 70.5 rushing yards", 70.5, player="Run Back",
+                                                                market="Prop:player_rush_yds")]))
+    rows = results._legs()
+    assert list(rows["team"]) == ["Wide Out", "Run Back"] and rows.iloc[0]["market"] == "Prop:player_reception_yds"
+    asked = []
+    stats = {"Wide Out": 80, "Run Back": results.DID_NOT_PLAY}
+
+    def get_stat(sport, player, market, home, away, start):
+        asked.append((sport, player, market, home, away))
+        return stats[player]
+
+    assert results.grade_pending(lambda *a: (27, 20), get_stat=get_stat, now=LATER) == 2
+    assert asked[0] == ("nfl", "Wide Out", "player_reception_yds", "Hawks", "Owls")
+    graded = results._legs().set_index("team")["result"]
+    assert graded["Wide Out"] == "win" and graded["Run Back"] == "push"  # didn't play = voided
+
+
+def test_prop_legs_wait_when_stats_are_not_published_or_no_stat_source_is_given():
+    results.log_parlay("nfl", "Balanced", prop_leg("Wide Out Over 60.5 receiving yards", 60.5))
+    assert results.grade_pending(lambda *a: (27, 20), now=LATER) == 0                       # no stat function
+    assert results.grade_pending(lambda *a: (27, 20), get_stat=lambda *a: None, now=LATER) == 0  # not published yet
+    assert results.grade_pending(lambda *a: None, get_stat=lambda *a: 99, now=LATER) == 0   # game not final
+    assert results._legs().iloc[0]["result"] == "pending"
+
+
+def test_nfl_player_stat(monkeypatch, tmp_path):
+    start = datetime(2026, 1, 1, 18, tzinfo=timezone.utc)
+    games = [{"season": 2026, "week": 7, "gameday": "2026-01-01", "home": "Hawks", "away": "Owls",
+              "home_score": 27, "away_score": 20}]
+    monkeypatch.setattr(stats_nfl, "_download_results", lambda: games)
+    monkeypatch.setattr(stats_nfl, "_team_names", lambda: {"SEA": "Hawks", "OWL": "Owls", "XYZ": "Others"})
+
+    def row(name, team, week, rec_yards):
+        return {"player_display_name": name, "season": 2026, "week": week, "season_type": "REG", "team": team,
+                "opponent_team": "OWL", "passing_yards": 0, "rushing_yards": 0, "receiving_yards": rec_yards, "receptions": 0}
+    rows = [row("Wide Out", "SEA", 7, 80), row("Other Guy", "OWL", 7, 10)]
+    published = {"yes": True}
+    monkeypatch.setattr(stats_nfl, "_download_season", lambda s: rows if s == 2026 and published["yes"] else [])
+    stats_nfl._load_results.cache_clear()
+    stats_nfl._load_table.cache_clear()
+    assert stats_nfl.get_player_stat("Wide Out", "player_reception_yds", "Hawks", "Owls", start) == 80
+    assert stats_nfl.get_player_stat("Benched Guy", "player_reception_yds", "Hawks", "Owls", start) == stats_nfl.DID_NOT_PLAY
+    published["yes"] = False  # the game's stats haven't been posted yet
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "fresh-cache.db")  # forget the data cached above
+    stats_nfl._load_table.cache_clear()
+    assert stats_nfl.get_player_stat("Wide Out", "player_reception_yds", "Hawks", "Owls", start) is None
+    assert stats_nfl.get_player_stat("Wide Out", "player_reception_yds", "Hawks", "Nobody", start) is None  # unknown game
+
+
+def test_nba_player_stat(monkeypatch):
+    start = datetime(2026, 1, 2, 0, 30, tzinfo=timezone.utc)
+
+    def fake_get(path, params):
+        if path == "/teams":
+            return {"data": [{"id": 1, "full_name": "Boston Celtics"}, {"id": 2, "full_name": "New York Knicks"}]}
+        if path == "/players":
+            return {"data": [{"id": 7, "first_name": "Jayson", "last_name": "Tatum"}]}
+        assert path == "/stats" and params["player_ids[]"] == 7
+        game = {"home_team_id": 1, "visitor_team_id": 2, "date": "2026-01-01T00:00:00.000Z"}
+        return {"data": [{"min": "36", "pts": 30, "reb": 8, "ast": 5, "fg3m": 4, "team": {"id": 1}, "game": game}]}
+
+    monkeypatch.setattr(stats_nba, "_get", fake_get)
+    assert stats_nba.get_player_stat("Jayson Tatum", "player_points", "Boston Celtics", "New York Knicks", start) == 30
+    assert stats_nba.get_player_stat("Jayson Tatum", "player_points_rebounds_assists", "Boston Celtics", "New York Knicks", start) == 43
+    # A different game that day means he has no line in this one: voided, not graded from another game.
+    assert stats_nba.get_player_stat("Jayson Tatum", "player_points", "New York Knicks", "Boston Celtics", start) == stats_nba.DID_NOT_PLAY
+    assert stats_nba.get_player_stat("Jayson Tatum", "player_points", "Nowhere", "New York Knicks", start) is None
+    assert stats_nba.DID_NOT_PLAY == stats_nfl.DID_NOT_PLAY == results.DID_NOT_PLAY

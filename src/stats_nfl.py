@@ -261,3 +261,29 @@ def get_final(home, away, start):
         if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2:
             return int(g.home_score), int(g.away_score)
     return None
+
+
+DID_NOT_PLAY = "dnp"  # a finished game where the player has no stat line (sportsbooks void these props)
+
+
+def get_player_stat(name, market, home, away, start):
+    """A player's value of the market's stat in one finished game.
+
+    Returns an int, DID_NOT_PLAY if the game's stats are published but he isn't in them, or None if the
+    game's stats aren't published yet (nflverse posts them a day or so after the game, so we wait).
+    """
+    column = MARKETS[market][0]
+    today = date.today().isoformat()
+    results = _load_results(today)
+    games = results[(results["home"] == home) & (results["away"] == away)]
+    game = next((g for g in games.itertuples()
+                 if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2), None)
+    if game is None:
+        return None
+    abbrs = {abbr for abbr, team in _team_names().items() if team in (home, away)}
+    table = _load_table(today)
+    published = table[(table["season"] == game.season) & (table["week"] == game.week) & table["team"].isin(abbrs)]
+    if published.empty:
+        return None
+    mine = published[published["KEY"] == _normalize(name)]
+    return DID_NOT_PLAY if mine.empty else int(mine[column].iloc[0])

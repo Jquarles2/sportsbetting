@@ -14,11 +14,40 @@ from src.ui_common import load_cost, quota_left, show_cost
 SPORTS = {
     "NFL": {"code": "nfl", "odds": odds.NFL, "hours": 24, "team_games": stats_nfl.get_team_games,
             "injuries": stats_nfl.get_team_injuries, "player_team": stats_nfl.get_player_team,
-            "get_final": stats_nfl.get_final, "pause": 0},
+            "get_final": stats_nfl.get_final, "pause": 0, "markets": stats_nfl.MARKETS,
+            "player_injury": stats_nfl.get_injury, "get_stat": stats_nfl.get_player_stat},
     "NBA": {"code": "nba", "odds": odds.NBA, "hours": 24, "team_games": stats_nba.get_team_games,
-            "injuries": None, "player_team": None, "get_final": stats_nba.get_final, "pause": 0},
+            "injuries": None, "player_team": None, "get_final": stats_nba.get_final, "pause": 0,
+            "markets": stats_nba.MARKETS, "player_injury": stats_nba.get_injury,
+            "get_stat": stats_nba.get_player_stat},
 }
 FINALS = {cfg["code"]: cfg["get_final"] for cfg in SPORTS.values()}
+STATS = {cfg["code"]: cfg["get_stat"] for cfg in SPORTS.values()}
+
+
+def loaded_prop_legs(cfg, state):
+    """Prop legs from the props you've already loaded and scanned in the NBA/NFL props tabs.
+
+    Only games on today's slate count, and it costs no Odds API requests: the props are already here.
+    Returns (legs DataFrame, list of prop labels that contributed).
+    """
+    code = cfg["code"]
+    slate_games = set(state["lines"]["GAME"])
+    frames, labels = [], []
+    for market, (_, label) in cfg["markets"].items():
+        loaded = st.session_state.get(f"{code}_{market}_props")
+        scanned = st.session_state.get(f"{code}_{market}_scan")
+        if not loaded or not scanned:
+            continue
+        props, scan = loaded[0], scanned[0]
+        props = props[props["GAME"].isin(slate_games)]
+        if props.empty or scan.empty:
+            continue
+        legs = guru.build_prop_legs(props, scan, market, label, state["flags"], cfg["player_injury"])
+        if not legs.empty:
+            frames.append(legs)
+            labels.append(label)
+    return (pd.concat(frames, ignore_index=True) if frames else pd.DataFrame(columns=guru.LEG_COLUMNS)), labels
 
 
 def show_storage(where):
@@ -181,7 +210,9 @@ def show_model(code):
     show_storage("record")
     if st.button("Grade finished games", key=f"bg_{code}_grade"):
         try:
-            n = results.grade_pending(lambda sport, home, away, start: FINALS[sport](home, away, start))
+            n = results.grade_pending(
+                lambda sport, home, away, start: FINALS[sport](home, away, start),
+                get_stat=lambda sport, player, market, home, away, start: STATS[sport](player, market, home, away, start))
             st.success(f"Graded {n} legs.")
         except Exception as e:  # network, storage or API trouble
             st.error(f"Couldn't grade right now: {e}")
@@ -211,6 +242,7 @@ def render_betguru():
     risk = left.select_slider("Risk level", options=list(guru.PROFILES), value="Balanced", key="bg_risk")
     n_legs = right.slider("Legs", 2, 6, 3, key="bg_legs")
     st.caption(guru.PROFILES[risk]["blurb"])
+    use_props = st.checkbox("Include player props I've loaded", value=True, key=f"{key}_useprops")
     st.caption("The slate is today's games: those starting in the next 24 hours that haven't kicked off yet.")
 
     too_expensive = show_cost(load_cost(cfg["odds"], cfg["hours"]))
@@ -242,6 +274,18 @@ def render_betguru():
         show_storage("error")
         return
     legs = guru.build_legs(state["lines"], state["form"], params, state["flags"], code)
+    prop_labels = []
+    if use_props:
+        prop_legs, prop_labels = loaded_prop_legs(cfg, state)
+        if not prop_legs.empty:
+            legs = pd.concat([legs, prop_legs], ignore_index=True)
+    if prop_labels:
+        st.caption(f"Player props in the mix: {', '.join(prop_labels)}. They use the book's fair odds like every other "
+                   "leg, and must also be consistent recently (Safe 80% of the last 10 games, Balanced 70%, "
+                   "Aggressive 60%).")
+    elif use_props:
+        st.caption(f"No props loaded for today's games. Load and scan them in the {sport_label} props tab and "
+                   "they'll appear here with no extra Odds API requests.")
     legs = guru.apply_user_list(legs, my_list, cfg["player_team"])
     parlay = guru.build_parlay(legs, risk, n_legs)
 

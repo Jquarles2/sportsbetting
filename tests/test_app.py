@@ -154,3 +154,26 @@ def test_broken_storage_refuses_to_build_a_parlay_rather_than_ignore_your_list(m
     click(at, "Build today's NFL slate")
     assert not at.exception and not at.metric
     assert any("won't build a parlay" in e.value and "timeout" in e.value for e in at.error)
+
+
+def test_loaded_props_join_the_candidates_but_only_for_todays_games(monkeypatch):
+    monkeypatch.setitem(ui_betguru.SPORTS["NFL"], "player_injury", lambda name: None)
+    cols = ["PLAYER", "GAME", "BOOK", "LINE", "OVER", "UNDER", "START"]
+    props = pd.DataFrame([("Wide Out", "Owls @ Hawks", "FanDuel", 60.5, -200, 170, "2099-01-01T00:00:00Z"),
+                          ("Other Week", "Tigers @ Bears", "FanDuel", 40.5, -110, -110, "2099-01-05T00:00:00Z")], columns=cols)
+    scan = pd.DataFrame({"PLAYER": ["Wide Out", "Other Week"], "GAME": "x", "LINE": 0.0, "VALUES": [[80] * 10, [50] * 10]})
+    at = run()
+    at.session_state["nfl_player_reception_yds_props"] = (props, "400")
+    at.session_state["nfl_player_reception_yds_scan"] = (scan, [])
+    click(at, "Build today's NFL slate")
+    assert not at.exception
+    legs = next(d.value for d in at.dataframe if "USER_REASON" in d.value.columns)
+    picks = set(legs["PICK"])
+    assert "Wide Out Over 60.5 receiving yards" in picks and not any("Other Week" in p for p in picks)
+    assert any("Player props in the mix: receiving yards" in c.value for c in at.caption)
+
+
+def test_without_loaded_props_the_tab_says_how_to_add_them():
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert any("No props loaded for today's games" in c.value for c in at.caption)
