@@ -98,7 +98,9 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   grading) were written from the docs and never run against a real key. Failures degrade quietly.
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built.
 - Supabase is tested only against our fake (`tests/fake_supabase.py`), never a real project, until the owner
-  connects one. The in-app "Check storage connection" button reports real problems in plain words.
+  connects one. The in-app "Check storage connection" button reports real problems in plain words and
+  names the project host. A 404 only means "tables missing" if it carries PostgREST's own error (PGRST205);
+  any other 404 means a wrong `SUPABASE_URL` (an early version conflated them and misled the owner).
   If storage is down, BetGuru refuses to build a parlay (it can't tell what your no-bet list excludes).
 - The no-bet list and record are shared by everyone who opens the app (no per-user accounts).
 - Phone layout is only what Streamlit gives by default (owner marked it low priority).

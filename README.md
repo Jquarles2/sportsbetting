@@ -109,6 +109,18 @@ Without it, everything still works but is wiped on restart.
    **Check storage connection**. You should see "Storage works", and a green box saying your data is saved
    in Supabase. Any problem shows up there in plain words (wrong key, tables not created, can't connect).
 
+If the check button shows an error:
+
+| It says | What it means | Fix |
+|---|---|---|
+| "has no 'nobet' table" (and names your project) | You're connected, but that project has no tables | Run `docs/supabase_setup.sql` in **that** project's SQL Editor, then `notify pgrst, 'reload schema';` |
+| "SUPABASE_URL is probably wrong" | Supabase said "not found" for the address you gave | Copy **Project URL** from Project Settings, Data API. It's `https://<id>.supabase.co` with nothing after it |
+| "the Supabase website, not your project" | You pasted a supabase.com dashboard link | Same: use the Project URL, not the browser address bar |
+| "rejected the key" | Wrong kind of key | Use the **secret** key (`sb_secret_...`) or `service_role`, not publishable or anon |
+| "Couldn't reach Supabase" | Network problem or the free project is paused | Open the Supabase dashboard; click **Restore project** if it's paused |
+
+After fixing a secret, reload the page: Streamlit keeps showing the last error until something re-runs.
+
 Good to know:
 - The secret key can read and write everything in your project. Treat it like a password: keep it only in
   secrets, never in the code or in a chat.
@@ -120,3 +132,16 @@ Good to know:
 
 See `CLAUDE.md` for the full file-by-file map, workflow notes and next steps, and `docs/PLAN.md` for the
 build history.
+
+## Links
+
+| What | Where |
+|---|---|
+| Your app, deploy, reboot, secrets, sharing | <https://share.streamlit.io> |
+| Code and pull requests | <https://github.com/Jquarles2/sportsbetting> |
+| Odds API (lines, props; usage and key under Account) | <https://the-odds-api.com> |
+| balldontlie (NBA stats) | <https://www.balldontlie.io> |
+| Anthropic console (Claude key, billing, spend limit) | <https://console.anthropic.com> |
+| Supabase (storage) | <https://supabase.com/dashboard> |
+| NFL data we read (nflverse) | <https://github.com/nflverse/nflverse-data/releases> |
+| Streamlit docs | <https://docs.streamlit.io> |

@@ -42,7 +42,8 @@ class FakeSupabase:
             return FakeResponse(401, {"message": "Invalid API key"})
         table = url.rsplit("/", 1)[-1]
         if table not in self.rows:
-            return FakeResponse(404, {"message": f"relation {table} does not exist"})
+            return FakeResponse(404, {"code": "PGRST205",
+                                      "message": f"Could not find the table 'public.{table}' in the schema cache"})
         params, body = params or {}, json.loads(data) if data else None
         prefer = headers.get("Prefer", "")
         if method == "GET":
