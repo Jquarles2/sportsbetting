@@ -81,3 +81,9 @@ def test_tables_cope_with_missing_data():
     sides = analysis.sides_table(lines, {})
     assert sides["COVER_L10"].isna().all() and sides["WIN_L10"].isna().all()
     assert analysis.totals_table(lines, {}).iloc[0]["AVG_COMBINED"] is None
+
+
+def test_hit_rates_can_use_another_stat_column():
+    logs = make_logs([30] * 5).assign(REB=[4, 4, 12, 12, 12])
+    out = analysis.hit_rates(logs, 9.5, "REB").set_index("SPLIT")
+    assert out.loc["Last 5", "OVERS"] == 3

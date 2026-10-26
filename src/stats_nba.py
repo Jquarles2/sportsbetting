@@ -4,6 +4,8 @@ nba_api (stats.nba.com) blocks cloud hosts like Streamlit Community Cloud, so we
 balldontlie instead. It needs a free API key, stored as BALLDONTLIE_API_KEY in
 .streamlit/secrets.toml locally, or in the app's Secrets settings on Streamlit Cloud.
 """
+import threading
+import time
 from datetime import date
 
 import pandas as pd
@@ -14,28 +16,59 @@ from src.config import get_secret
 
 BASE_URL = "https://api.balldontlie.io/v1"
 # Columns we show, in order.
-LOG_COLUMNS = ["GAME_DATE", "HOME_AWAY", "MIN", "PTS", "REB", "AST", "FG3M"]
+LOG_COLUMNS = ["GAME_DATE", "HOME_AWAY", "MIN", "PTS", "REB", "AST", "FG3M", "PRA"]
+# The Odds API market -> (column in the game logs, label for the UI)
+MARKETS = {
+    "player_points": ("PTS", "points"),
+    "player_rebounds": ("REB", "rebounds"),
+    "player_assists": ("AST", "assists"),
+    "player_threes": ("FG3M", "threes made"),
+    "player_points_rebounds_assists": ("PRA", "points + rebounds + assists"),
+}
+# The $10 plan allows 60 requests a minute. Waiting 1.1 seconds between calls stays just under it.
+MIN_SECONDS_BETWEEN_CALLS = 1.1
+_pace_lock = threading.Lock()  # Streamlit runs each visitor in their own thread
+_last_call = 0.0
 
 
 def get_api_key():
     return get_secret("BALLDONTLIE_API_KEY")
 
 
+def _wait_for_turn():
+    """Sleep just long enough that all our calls together stay under the plan's rate limit."""
+    global _last_call
+    with _pace_lock:
+        wait = MIN_SECONDS_BETWEEN_CALLS - (time.monotonic() - _last_call)
+        if wait > 0:
+            time.sleep(wait)
+        _last_call = time.monotonic()
+
+
 def _get(path, params):
-    """Call the API and return the parsed JSON. Raises a readable error on failure."""
+    """Call the API and return the parsed JSON. Raises a readable error on failure.
+
+    Calls are paced to stay under the rate limit, and a 429 (too many requests) is retried
+    after a short wait.
+    """
     key = get_api_key()
     if not key:
         raise RuntimeError("No BALLDONTLIE_API_KEY found. Add it to your secrets.")
-    resp = requests.get(
-        f"{BASE_URL}{path}", params=params, headers={"Authorization": key}, timeout=20
-    )
+    for attempt in range(4):
+        _wait_for_turn()
+        resp = requests.get(
+            f"{BASE_URL}{path}", params=params, headers={"Authorization": key}, timeout=20
+        )
+        if resp.status_code != 429:
+            break
+        time.sleep(10 * (attempt + 1))  # 10s, 20s, 30s, then give up
     if resp.status_code == 401:
         raise RuntimeError(
             f"balldontlie rejected the {path} request (401). For /players that means a bad "
             "API key; for /stats it usually means your plan doesn't include game stats."
         )
     if resp.status_code == 429:
-        raise RuntimeError("balldontlie rate limit hit (free plan is 5 requests/minute). Wait a minute.")
+        raise RuntimeError("balldontlie rate limit still hit after retrying. Wait a minute and try again.")
     resp.raise_for_status()
     return resp.json()
 
@@ -45,12 +78,18 @@ def find_player(name):
     words = name.strip().lower().split()
     if not words:
         return None
+    key = "bdl_player_" + " ".join(words)  # a player's id never changes, so don't look them up twice
+    cached = cache.get(key)
+    if cached is not None:
+        return cached
     # The API's search matches single words well, so search the last word, then filter.
     data = _get("/players", {"search": words[-1], "per_page": 100})["data"]
     matches = [
         p for p in data
         if all(w in f"{p['first_name']} {p['last_name']}".lower() for w in words)
     ]
+    if matches:
+        cache.put(key, matches[0])
     return matches[0] if matches else None
 
 
@@ -94,7 +133,7 @@ def get_game_logs(name, n=10):
     if rows is None:
         season = _current_season()
         stats = _fetch_season_stats(player["id"], season)
-        if len(stats) < n:  # early in a season, so also pull last season
+        if len(stats) < 20:  # early in a season, so also pull last season (20 = most we ever show)
             stats += _fetch_season_stats(player["id"], season - 1)
         rows = [_to_row(s) for s in stats if s.get("min")]  # skip games they didn't play
         rows.sort(key=lambda r: r["GAME_DATE"], reverse=True)
@@ -102,13 +141,20 @@ def get_game_logs(name, n=10):
 
     if not rows:
         return pd.DataFrame(columns=LOG_COLUMNS)
-    return pd.DataFrame(rows).head(n)[LOG_COLUMNS].reset_index(drop=True)
+    df = pd.DataFrame(rows).head(n).reset_index(drop=True)
+    df["PRA"] = df["PTS"] + df["REB"] + df["AST"]  # points + rebounds + assists
+    return df[LOG_COLUMNS]
 
 
-def get_recent_points(name, n=20):
-    """A player's last n point totals, newest first, or None if the player isn't found."""
+def get_recent_values(name, market, n=20):
+    """A player's last n values of the market's stat, newest first, or None if not found.
+
+    All stats come from the same cached game logs, so switching from points to rebounds
+    doesn't cost any extra balldontlie requests.
+    """
+    column = MARKETS[market][0]
     logs = get_game_logs(name, n=n)
-    return None if logs is None else [int(p) for p in logs["PTS"]]
+    return None if logs is None else [int(v) for v in logs[column]]
 
 
 def _teams():
