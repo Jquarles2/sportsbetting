@@ -250,19 +250,23 @@ with nba_tab:
     )
 
 with nfl_tab:
-    st.header("This week's NFL props")
+    st.header("NFL props")
+    windows = {"Today": 24, "Next 3 days": 72, "This week": 168}
+    window_label = st.selectbox("Games", list(windows), key="nfl_window")
+    window_hours = windows[window_label]
     market = st.selectbox(
         "Prop type", list(stats_nfl.MARKETS), format_func=lambda m: stats_nfl.MARKETS[m][1].title()
     )
-    st.caption("Each prop type is loaded separately. Load one at a time to stay inside the free plan.")
+    st.caption("Props cost 1 Odds API request per game, per prop type, and each game is only ever bought once "
+               "a day. Today's games keep it cheap; widening the window pays only for the extra games.")
     stat_label = stats_nfl.MARKETS[market][1]
     props_dashboard(
         f"nfl_{market}",
-        load_props=lambda: odds.get_todays_props(odds.NFL, market, hours=24 * 7),
+        load_props=lambda: odds.get_todays_props(odds.NFL, market, hours=window_hours),
         get_values=lambda player: stats_nfl.get_recent_values(player, market),
         stat_label=stat_label,
-        load_label=f"Load this week's {stat_label} props",
-        cost=lambda: load_cost(odds.NFL, 24 * 7, market),
+        load_label=f"Load {stat_label} props ({window_label.lower()})",
+        cost=lambda: load_cost(odds.NFL, window_hours, market),
         get_facts=lambda player, game: facts_list(
             writeups.describe_injury(stats_nfl.get_injury(player)),
             writeups.describe_matchup(stats_nfl.get_matchup(player, market, game), stat_label),
@@ -272,8 +276,8 @@ with nfl_tab:
     st.header("NFL moneylines, spreads and totals")
     game_lines_section(
         "nfl",
-        load_lines=lambda: odds.get_game_lines(odds.NFL, hours=24 * 7),
+        load_lines=lambda: odds.get_game_lines(odds.NFL, hours=window_hours),
         get_team_games=stats_nfl.get_team_games,
         pause=0,  # results come from one downloaded file
-        cost=lambda: load_cost(odds.NFL, 24 * 7),
+        cost=lambda: load_cost(odds.NFL, window_hours),
     )

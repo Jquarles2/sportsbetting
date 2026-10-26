@@ -44,10 +44,14 @@ def lines_cache_key(sport):
     return f"odds_{sport}_lines_{BOOKMAKER}"
 
 
-def _starts_soon(event, hours):
-    start = datetime.fromisoformat(event["commence_time"].replace("Z", "+00:00"))
+def _in_window(start_iso, hours, grace_hours=4):
+    """True if a game starting at start_iso (like '2026-10-26T01:15:00Z') is within the window.
+
+    The window runs from `grace_hours` ago (so a game that just tipped off still counts) to `hours` ahead.
+    """
+    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     now = datetime.now(timezone.utc)
-    return now - timedelta(hours=4) < start < now + timedelta(hours=hours)
+    return now - timedelta(hours=grace_hours) < start < now + timedelta(hours=hours)
 
 
 def parse_event_props(event, odds, market="player_points"):
@@ -71,32 +75,43 @@ def parse_event_props(event, odds, market="player_points"):
 
 
 def get_todays_props(sport=NBA, market="player_points", hours=24):
-    """Return (DataFrame of props for games in the next `hours`, requests_remaining).
+    """Return (DataFrame of props for games starting in the next `hours`, requests_remaining).
 
-    Cached for the day, separately for each sport and market.
+    Costs 1 request per game, and each game is only ever bought once per day: the answers are cached
+    per game, so widening the window later pays only for the new games. The window is applied when
+    reading. Games that have already started are skipped (their pre-game props can't be bet).
     """
     cache_key = props_cache_key(sport, market)
-    cached = cache.get(cache_key)
-    if cached is None:
+    cached = cache.get(cache_key) or {"rows": [], "fetched": [], "remaining": None}
+    legacy = "fetched" not in cached  # an older cache entry: treat it as complete for the day
+    try:
         events, remaining = _get(f"/sports/{sport}/events", {})  # listing is free
-        rows = []
+    except Exception:
+        if not cached["rows"] and not cached["fetched"]:
+            raise  # nothing cached to fall back on
+        events, remaining = [], None  # the listing failed: serve what we already bought, buy nothing new
+    cached["remaining"] = remaining if remaining is not None else cached.get("remaining")
+    changed = False
+    if not legacy:
         for event in events:
-            if not _starts_soon(event, hours):
+            if event["id"] in cached["fetched"] or not _in_window(event["commence_time"], hours, grace_hours=0):
                 continue
             try:
-                odds, remaining = _get(
+                odds, cached["remaining"] = _get(
                     f"/sports/{sport}/events/{event['id']}/odds",
                     {"bookmakers": BOOKMAKER, "markets": market, "oddsFormat": "american"},
                 )
+                cached["rows"] += parse_event_props(event, odds, market)
             except requests.HTTPError as e:
-                if e.response is not None and e.response.status_code in (404, 422):
-                    continue  # no props posted for this game yet
-                raise
-            rows += parse_event_props(event, odds, market)
-        cached = {"rows": rows, "remaining": remaining}
+                if e.response is None or e.response.status_code not in (404, 422):
+                    raise  # (404/422 just mean no props are posted for this game yet)
+            cached["fetched"].append(event["id"])
+            changed = True
+    if changed:
         cache.put(cache_key, cached)
 
-    df = pd.DataFrame(cached["rows"], columns=COLUMNS)
+    rows = [r for r in cached["rows"] if _in_window(r["START"], hours, grace_hours=0)]
+    df = pd.DataFrame(rows, columns=COLUMNS)
     return df.sort_values(["PLAYER", "BOOK"]).reset_index(drop=True), cached["remaining"]
 
 
@@ -127,10 +142,13 @@ def parse_game_lines(event):
     return row
 
 
-def get_game_lines(sport=NBA, hours=24):
+def get_game_lines(sport=NBA, hours=24, include_started=False):
     """Return (DataFrame of moneyline/spread/total per game, requests_remaining).
 
-    One call covers every game, but it costs 1 request per market (3 here). Cached for the day.
+    One call covers every game, but it costs 1 request per market (3 here). Every upcoming game is
+    cached for the day, and the time window is applied when reading, so asking for a different window
+    never costs requests. Games that have already started are left out unless include_started is set:
+    their pre-game lines can't be bet anymore.
     """
     cache_key = lines_cache_key(sport)
     cached = cache.get(cache_key)
@@ -139,11 +157,13 @@ def get_game_lines(sport=NBA, hours=24):
             f"/sports/{sport}/odds",
             {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
         )
-        rows = [parse_game_lines(e) for e in events if _starts_soon(e, hours)]
+        rows = [parse_game_lines(e) for e in events]  # keep them all; the window is applied below
         cached = {"rows": [r for r in rows if r], "remaining": remaining}
         cache.put(cache_key, cached)
 
-    df = pd.DataFrame(cached["rows"], columns=LINE_COLUMNS)
+    grace = 4 if include_started else 0
+    rows = [r for r in cached["rows"] if _in_window(r["START"], hours, grace)]
+    df = pd.DataFrame(rows, columns=LINE_COLUMNS)
     return df.sort_values("START").reset_index(drop=True), cached["remaining"]
 
 
@@ -155,23 +175,27 @@ def requests_remaining():
     return int(remaining) if remaining is not None else None
 
 
-def count_games(sport, hours):
-    """How many games start within `hours` (these are the games a props load would pay for)."""
+def event_ids(sport, hours):
+    """The ids of games starting in the next `hours` that haven't started: the games props would pay for."""
     events, _ = _get(f"/sports/{sport}/events", {})
-    return sum(_starts_soon(e, hours) for e in events)
+    return [e["id"] for e in events if _in_window(e["commence_time"], hours, grace_hours=0)]
 
 
-def estimate_cost(sport, hours, market=None, count=count_games):
+def count_games(sport, hours):
+    return len(event_ids(sport, hours))
+
+
+def estimate_cost(sport, hours, market=None, ids=event_ids):
     """Requests a load would use right now. Pass market for props, or leave it out for game lines.
 
-    It's 0 when today's result is already cached. Props cost 1 request per game; game lines
-    cost 3 (one per market: moneyline, spread, total) however many games there are.
-    `count` is the function that counts games; the app passes a cached one.
+    Props cost 1 request for each game in the window that isn't already cached today (so 0 if all are).
+    Game lines cost 3 (one per market: moneyline, spread, total) however many games there are, or 0 if
+    cached. `ids` is the function that lists the games; the app passes a cached one.
     """
     if market:
-        if cache.get(props_cache_key(sport, market)) is not None:
-            return 0
-        return count(sport, hours)
-    if cache.get(lines_cache_key(sport)) is not None:
-        return 0
-    return 3
+        cached = cache.get(props_cache_key(sport, market))
+        if cached is not None and "fetched" not in cached:
+            return 0  # an older cache entry, treated as complete for the day
+        fetched = set(cached["fetched"]) if cached else set()
+        return len([i for i in ids(sport, hours) if i not in fetched])
+    return 0 if cache.get(lines_cache_key(sport)) is not None else 3

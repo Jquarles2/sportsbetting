@@ -1,3 +1,4 @@
+import pytest
 import requests
 
 from src import cache, odds
@@ -28,52 +29,98 @@ def test_parse_event_props_pairs_over_and_under():
     assert dk["GAME"] == "New York Knicks @ Boston Celtics"
 
 
-def test_get_todays_props_skips_far_future_games_and_caches(tmp_path, monkeypatch):
-    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    calls = []
+def at(hours):
+    """An ISO start time `hours` from now (negative = already started)."""
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    def fake_get(path, params):
-        calls.append(path)
+
+def game(i, hours):
+    return {**event(i), "commence_time": at(hours), "home_team": f"{i} home", "away_team": f"{i} away"}
+
+
+class FakeOdds:
+    """Counts the calls that cost money (the per-game odds ones) so we can check what we're charged."""
+
+    def __init__(self, events):
+        self.events, self.paid, self.free = events, [], 0
+
+    def __call__(self, path, params):
         if path.endswith("/events"):
-            return [event()], "499"
-        return props_json(), "498"
-
-    monkeypatch.setattr(odds, "_get", fake_get)
-    # The sample game is in 2099, so it's outside the 24h window and no props are fetched.
-    df, remaining = odds.get_todays_props()
-    assert df.empty and list(df.columns) == odds.COLUMNS
-    assert len(calls) == 1  # only the free events listing
-
-    odds.get_todays_props()
-    assert len(calls) == 1  # second call came from the cache
+            self.free += 1
+            return self.events, "400"
+        self.paid.append(path.split("/")[-2])  # the event id
+        return props_json(), str(400 - len(self.paid))
 
 
-def test_get_todays_props_fetches_games_starting_soon(tmp_path, monkeypatch):
+def test_props_are_bought_once_per_game_and_only_for_games_in_the_window(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
+    fake = FakeOdds([game("started", -1), game("tonight", 3), game("sunday", 70)])
+    monkeypatch.setattr(odds, "_get", fake)
 
-    def fake_get(path, params):
-        return ([event()], "499") if path.endswith("/events") else (props_json(), "498")
+    df, remaining = odds.get_todays_props(odds.NFL, "player_points", hours=24)
+    assert fake.paid == ["tonight"] and len(df) == 2 and set(df["GAME"]) == {"tonight away @ tonight home"}
+    odds.get_todays_props(odds.NFL, "player_points", hours=24)
+    assert fake.paid == ["tonight"]                      # asking again costs nothing
 
-    monkeypatch.setattr(odds, "_get", fake_get)
-    df, remaining = odds.get_todays_props()
-    assert len(df) == 2 and remaining == "498"
+    df, _ = odds.get_todays_props(odds.NFL, "player_points", hours=96)
+    assert fake.paid == ["tonight", "sunday"]            # a wider window pays only for the new game
+    assert len(df) == 4
+    df, _ = odds.get_todays_props(odds.NFL, "player_points", hours=24)
+    assert len(df) == 2 and fake.paid == ["tonight", "sunday"]  # and narrowing back is free
 
 
-def test_game_without_props_is_skipped(tmp_path, monkeypatch):
+def test_empty_window_buys_nothing(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: True)
+    fake = FakeOdds([game("far", 500)])
+    monkeypatch.setattr(odds, "_get", fake)
+    df, _ = odds.get_todays_props()
+    assert df.empty and list(df.columns) == odds.COLUMNS and fake.paid == []
+
+
+def test_a_game_without_props_is_remembered_so_it_is_not_asked_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    paid = []
 
     def fake_get(path, params):
         if path.endswith("/events"):
-            return [event()], "499"
+            return [game("g", 3)], "499"
+        paid.append(path)
         resp = requests.Response()
         resp.status_code = 422
         raise requests.HTTPError(response=resp)
 
     monkeypatch.setattr(odds, "_get", fake_get)
     df, _ = odds.get_todays_props()
-    assert df.empty
+    odds.get_todays_props()
+    assert df.empty and len(paid) == 1
+
+
+def test_other_errors_are_not_swallowed(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+
+    def fake_get(path, params):
+        if path.endswith("/events"):
+            return [game("g", 3)], "499"
+        resp = requests.Response()
+        resp.status_code = 500
+        raise requests.HTTPError(response=resp)
+
+    monkeypatch.setattr(odds, "_get", fake_get)
+    with pytest.raises(requests.HTTPError):
+        odds.get_todays_props()
+
+
+def test_an_older_cache_entry_is_used_as_is_without_buying_again(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    old_row = {"PLAYER": "Jayson Tatum", "GAME": "Knicks @ Celtics", "BOOK": "FanDuel", "LINE": 27.5,
+               "OVER": -110, "UNDER": -110, "START": at(3)}
+    cache.put(odds.props_cache_key(odds.NBA, "player_points"), {"rows": [old_row], "remaining": "300"})
+    fake = FakeOdds([game("new", 3)])
+    monkeypatch.setattr(odds, "_get", fake)
+    df, _ = odds.get_todays_props()
+    assert list(df["PLAYER"]) == ["Jayson Tatum"] and fake.paid == []
+    assert odds.estimate_cost(odds.NBA, 24, "player_points", ids=lambda s, h: ["new"]) == 0
 
 
 def game_json():
@@ -109,29 +156,73 @@ def test_get_game_lines_filters_by_time_and_caches(tmp_path, monkeypatch):
 
 def test_free_calls_and_cost_estimates(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    fake = FakeOdds([game("started", -1), game("a", 3), game("b", 5), game("later", 70)])
     paths = []
 
-    def fake_get(path, params):
+    def spy(path, params):
         paths.append(path)
-        if path == "/sports":
-            return [], "312"
-        return [event("a"), event("b")], "312"
+        return ([], "312") if path == "/sports" else fake(path, params)
 
-    monkeypatch.setattr(odds, "_get", fake_get)
+    monkeypatch.setattr(odds, "_get", spy)
     assert odds.requests_remaining() == 312
-    monkeypatch.setattr(odds, "_starts_soon", lambda e, hours: e["id"] == "a")
-    assert odds.count_games(odds.NBA, 24) == 1
-    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 1  # 1 game, 1 request
-    assert odds.estimate_cost(odds.NBA, 24) == 3  # game lines are always 3
+    assert odds.event_ids(odds.NBA, 24) == ["a", "b"]  # not the started game, not the one 70 hours away
+    assert odds.count_games(odds.NBA, 24) == 2
+    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 2   # 2 games, 1 request each
+    assert odds.estimate_cost(odds.NBA, 24) == 3                    # game lines are always 3
 
-    # Once today's result is cached, loading again is free.
-    cache.put(odds.props_cache_key(odds.NBA, "player_points"), {"rows": [], "remaining": "1"})
+    odds.get_todays_props(odds.NBA, "player_points", hours=24)       # buys a and b
+    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 0   # already bought today
+    assert odds.estimate_cost(odds.NBA, 96, "player_points") == 1   # only the extra game is new
+    assert odds.estimate_cost(odds.NBA, 24, "player_rebounds") == 2  # each prop type is bought separately
+
     cache.put(odds.lines_cache_key(odds.NBA), {"rows": [], "remaining": "1"})
-    assert odds.estimate_cost(odds.NBA, 24, "player_points") == 0
     assert odds.estimate_cost(odds.NBA, 24) == 0
-    assert set(paths) <= {"/sports", f"/sports/{odds.NBA}/events"}  # nothing that costs money
+    assert all(p == "/sports" or p.endswith("/events") or p.endswith("/odds") for p in paths)
+    assert fake.paid == ["a", "b"]  # the estimates themselves bought nothing
 
 
 def test_remaining_is_none_when_header_missing(monkeypatch):
     monkeypatch.setattr(odds, "_get", lambda path, params: ([], None))
     assert odds.requests_remaining() is None
+
+
+def test_game_lines_window_is_applied_when_reading_and_started_games_are_dropped(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta, timezone
+
+    def at(hours):
+        return (datetime.now(timezone.utc) + timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    games = {"started": at(-1), "tonight": at(3), "sunday": at(30)}
+    events = [{**game_json(), "id": name, "commence_time": when, "home_team": f"{name} home",
+               "away_team": f"{name} away"} for name, when in games.items()]
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    calls = []
+    monkeypatch.setattr(odds, "_get", lambda path, params: calls.append(path) or (events, "400"))
+    for e in events:  # parse_game_lines matches outcome names to the home team, so give each its own
+        for m in e["bookmakers"][0]["markets"]:
+            for o in m["outcomes"]:
+                o["name"] = {"Boston Celtics": e["home_team"], "New York Knicks": e["away_team"]}.get(o["name"], o["name"])
+
+    def games_in(**kw):
+        return [g.split(" @ ")[1].split(" ")[0] for g in odds.get_game_lines(odds.NFL, **kw)[0]["GAME"]]
+
+    assert games_in(hours=24) == ["tonight"]                          # not the one that started, not Sunday's
+    assert games_in(hours=48) == ["tonight", "sunday"]                # a wider window reuses the cache
+    assert games_in(hours=24, include_started=True) == ["started", "tonight"]
+    assert len(calls) == 1                                            # one fetch served all three
+
+
+def test_props_already_bought_are_served_even_if_the_free_listing_fails(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    fake = FakeOdds([game("tonight", 3)])
+    monkeypatch.setattr(odds, "_get", fake)
+    odds.get_todays_props(odds.NBA, "player_points", hours=24)
+
+    def down(path, params):
+        raise requests.ConnectionError("odds api unreachable")
+
+    monkeypatch.setattr(odds, "_get", down)
+    df, _ = odds.get_todays_props(odds.NBA, "player_points", hours=24)  # served from what we already bought
+    assert len(df) == 2
+    with pytest.raises(requests.ConnectionError):
+        odds.get_todays_props(odds.NBA, "player_rebounds", hours=24)    # nothing cached for this one: a real error

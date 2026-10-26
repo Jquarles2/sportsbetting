@@ -13,15 +13,24 @@ import pandas as pd
 
 from src import store
 
+DID_NOT_PLAY = "dnp"
 COLUMNS = ["id", "logged_on", "sport", "risk", "game", "start", "market", "pick", "team", "line",
            "price", "p", "result", "graded_on"]
+
+
+def _who(leg):
+    """Who a leg is about: the player for a prop, otherwise the team (None for totals)."""
+    who = getattr(leg, "PLAYER", None) if str(leg.MARKET).startswith("Prop:") else leg.TEAM
+    return None if who is None or pd.isna(who) else who
 
 
 def log_parlay(sport, risk, legs):
     """Save a suggested parlay's legs. Logging the same parlay twice in a day does nothing."""
     today = date.today().isoformat()
-    rows = [{"logged_on": today, "sport": sport, "risk": risk, "game": leg.GAME, "start": leg.START,
-             "market": leg.MARKET, "pick": leg.PICK, "team": None if pd.isna(leg.TEAM) else leg.TEAM,
+    # Prop legs have no team; the "team" column holds the player's name instead (so no schema change).
+    # A ticket can mix sports (the lotto): a leg's own SPORT column wins over the `sport` argument.
+    rows = [{"logged_on": today, "sport": getattr(leg, "SPORT", None) or sport, "risk": risk, "game": leg.GAME, "start": leg.START,
+             "market": leg.MARKET, "pick": leg.PICK, "team": _who(leg),
              "line": None if pd.isna(leg.LINE) else float(leg.LINE), "price": float(leg.PRICE),
              "p": float(leg.P)} for leg in legs.itertuples()]
     store.get_store().picks_add(rows)
@@ -38,11 +47,21 @@ def grade_leg(market, pick, team, line, home, away, home_score, away_score):
     return "win" if diff > 0 else "loss" if diff < 0 else "push"
 
 
-def grade_pending(get_final, now=None):
+def grade_prop(pick, line, value):
+    """'win', 'loss' or 'push' for a prop leg given the player's actual stat. DID_NOT_PLAY is a push (void)."""
+    if value == DID_NOT_PLAY:
+        return "push"
+    diff = value - line if " Over " in pick else line - value
+    return "win" if diff > 0 else "loss" if diff < 0 else "push"
+
+
+def grade_pending(get_final, get_stat=None, now=None):
     """Grade every logged leg whose game is over. Returns how many were graded.
 
     get_final(sport, home, away, start) returns (home_score, away_score), or None if the game
     isn't final (or can't be found). Games that started under 5 hours ago are left alone.
+    get_stat(sport, player, odds_market, home, away, start) returns a player's stat for prop legs
+    (an int, DID_NOT_PLAY, or None if it isn't available yet). Without it, prop legs stay waiting.
     """
     now = now or datetime.now(timezone.utc)
     db = store.get_store()
@@ -57,7 +76,13 @@ def grade_pending(get_final, now=None):
         final = finals[(leg["sport"], leg["game"])]
         if final is None:
             continue
-        result = grade_leg(leg["market"], leg["pick"], leg["team"], leg["line"], home, away, *final)
+        if leg["market"].startswith("Prop:"):
+            value = get_stat and get_stat(leg["sport"], leg["team"], leg["market"][len("Prop:"):], home, away, started)
+            if value is None:
+                continue  # the player's stats aren't published yet; try again next time
+            result = grade_prop(leg["pick"], leg["line"], value)
+        else:
+            result = grade_leg(leg["market"], leg["pick"], leg["team"], leg["line"], home, away, *final)
         db.picks_grade(leg["id"], result, date.today().isoformat())
         graded += 1
     return graded
@@ -99,7 +124,10 @@ def parlay_record():
     if df.empty:
         return {"won": 0, "lost": 0, "pending": 0}
     counts = {"won": 0, "lost": 0, "pending": 0}
-    for _, g in df.groupby(["logged_on", "sport", "risk"]):
+    # A lotto ticket can span sports, so it's one parlay per day whatever its legs' sports.
+    df = df.assign(ticket=[(d, "all", r) if r == "Lotto" else (d, sp, r)
+                           for d, sp, r in zip(df["logged_on"], df["sport"], df["risk"])])
+    for _, g in df.groupby("ticket"):
         if (g["result"] == "loss").any():
             counts["lost"] += 1
         elif (g["result"] == "pending").any():

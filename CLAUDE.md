@@ -47,7 +47,10 @@ labelled "don't trust this" number. Never switch the headline back to model chan
 - Use only legitimate, public data sources. Don't scrape or call private endpoints of Rotobot,
   PropsBot or other competitors. REA is for learning how features work, not for copying data.
 - Keep API usage low. The Odds API free tier is ~500 requests/month: cache everything, and show the
-  cost before every load (`src/ui_common.py`). Free Odds API calls: `/sports` (also returns the
+  cost before every load (`src/ui_common.py`). Cache "days" are the betting day (`cache.today()`, rolls at
+  5 a.m. Eastern, NOT UTC midnight). Props are cached per game and the time window is applied when reading, so
+  a game is bought at most once a day; started games are never bought. Details and a monthly budget are in
+  the README. Anything new that calls the Odds API must go through these paths and show its cost. Free Odds API calls: `/sports` (also returns the
   remaining balance) and `/sports/{sport}/events`. Costs: props = 1 request per game per prop type;
   game lines = 3 per sport (h2h, spreads, totals) however many games.
 - balldontlie: every call goes through `stats_nba._get`, which spaces calls (1.1 s) and retries 429s.
@@ -62,7 +65,9 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   and the shared `props_dashboard` / `game_lines_section` for the props tabs.
 - `src/ui_betguru.py`: the BetGuru tab (slate, parlay, game talks, no-bet list, model and record).
 - `src/ui_common.py`: Odds API quota and "this will cost N requests" helpers (Streamlit-cached).
-- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates)
+- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates). Game lines cache every
+  upcoming game and apply the time window when reading (`hours`, and started games are dropped unless
+  `include_started`); the BetGuru slate is "next 24 hours, not yet started" for both sports.
 - `src/stats_nba.py`: balldontlie (game logs, team games, final scores, injuries). Props markets map:
   points/rebounds/assists/threes/PRA.
 - `src/stats_nfl.py`: nflverse (weekly stats, team results, finals, injuries, matchups).
@@ -71,7 +76,11 @@ labelled "don't trust this" number. Never switch the headline back to model chan
 - `src/ratings.py`: the team-vs-team model (rating blend, expected margin/total, probabilities).
 - `src/backtest.py`, `src/bayes.py`, `scripts/train_weights.py`: backtest on historical NFL lines and
   Bayesian optimization of the model settings. Writes `data/model_nfl.json` (committed).
-- `src/guru.py`: legs, flags, no-bet list, parlay builder (Safe / Balanced / Aggressive).
+- `src/guru.py`: legs (game legs, plus prop legs from `build_prop_legs`), flags, no-bet list, parlay builder
+  (Safe / Balanced / Aggressive). Prop legs: MARKET `Prop:<odds market>`, priced at the book's no-vig odds
+  (never a model edge), filtered by recent hit rate (`SUPPORT`, `PROFILES[...]["prop_support"]`).
+- `src/lotto.py`: the lotto ticket (long shot for a small stake; best price per risk, one leg per game,
+  trims unneeded legs; mixes sports and props; the headline numbers are the book's fair odds).
 - `src/talks.py`, `src/writeups.py`, `src/claude.py`: Claude-written game talks and pick write-ups.
 - `src/store.py`: storage backends (SQLiteStore, SupabaseStore) and `get_store()`. All persistence goes
   through it. `src/results.py`, `src/nobet.py`: results log + grading + calibration; your no-bet list.
@@ -97,6 +106,9 @@ labelled "don't trust this" number. Never switch the headline back to model chan
   on the deployed app). NBA injuries (`/player_injuries`) and NBA finals (`stats_nba.get_final`, used for
   grading) were written from the docs and never run against a real key. Failures degrade quietly.
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built.
+- Prop-leg grading (`stats_nfl.get_player_stat`, `stats_nba.get_player_stat`) is tested against fakes only. NFL
+  waits until nflverse publishes the game's weekly stats (about a day); a final game with no stat line for the
+  player is voided as a push.
 - Supabase is tested only against our fake (`tests/fake_supabase.py`), never a real project, until the owner
   connects one. The in-app "Check storage connection" button reports real problems in plain words and
   names the project host. A 404 only means "tables missing" if it carries PostgREST's own error (PGRST205);

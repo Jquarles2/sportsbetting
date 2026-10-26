@@ -207,27 +207,48 @@ def get_team_games(team_name, n=20):
     return [{"for": g["for"], "against": g["against"]} for g in games[:n]]
 
 
+_injuries_failed_at = None
+INJURY_RETRY_SECONDS = 300  # after a failed call, don't try again for 5 minutes
+
+
 def _injuries():
-    """Everyone on balldontlie's injury list as {'name', 'status', 'detail'} dicts, cached for the day."""
+    """Everyone on balldontlie's injury list as {'name', 'status', 'detail'} dicts, cached for the day.
+
+    If the call fails (say the plan doesn't include injuries), later calls fail instantly for a few minutes
+    instead of each waiting for another doomed request.
+    """
+    global _injuries_failed_at
     rows = cache.get("bdl_injuries")
+    if rows is None and _injuries_failed_at and time.monotonic() - _injuries_failed_at < INJURY_RETRY_SECONDS:
+        raise RuntimeError("balldontlie injuries unavailable (a recent request failed)")
     if rows is None:
-        rows, cursor = [], None
-        for _ in range(5):
-            params = {"per_page": 100}
-            if cursor:
-                params["cursor"] = cursor
-            data = _get("/player_injuries", params)
-            for item in data["data"]:
-                player = item.get("player") or {}
-                rows.append({
-                    "name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
-                    "status": item.get("status"),
-                    "detail": item.get("description") or item.get("comment"),
-                })
-            cursor = data.get("meta", {}).get("next_cursor")
-            if not cursor:
-                break
+        try:
+            rows = _fetch_injuries()
+        except Exception:
+            _injuries_failed_at = time.monotonic()
+            raise
         cache.put("bdl_injuries", rows)
+    return rows
+
+
+def _fetch_injuries():
+    """Ask balldontlie for the injury list (follows its pages) as {'name', 'status', 'detail'} dicts."""
+    rows, cursor = [], None
+    for _ in range(5):
+        params = {"per_page": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = _get("/player_injuries", params)
+        for item in data["data"]:
+            player = item.get("player") or {}
+            rows.append({
+                "name": f"{player.get('first_name', '')} {player.get('last_name', '')}".strip(),
+                "status": item.get("status"),
+                "detail": item.get("description") or item.get("comment"),
+            })
+        cursor = data.get("meta", {}).get("next_cursor")
+        if not cursor:
+            break
     return rows
 
 
@@ -257,3 +278,30 @@ def get_final(home, away, start):
                 and g["visitor_team"]["full_name"] == away):
             return g["home_team_score"], g["visitor_team_score"]
     return None
+
+
+DID_NOT_PLAY = "dnp"  # a finished game where the player didn't play (sportsbooks void these props)
+
+
+def get_player_stat(name, market, home, away, start):
+    """A player's value of the market's stat in one finished NBA game.
+
+    Returns an int, DID_NOT_PLAY if there's no stat line with minutes for him in that game, or None if
+    we can't identify the player or the teams (so the leg stays waiting instead of being voided wrongly).
+    """
+    column = MARKETS[market][0]
+    player = find_player(name)
+    team_ids = {t["full_name"]: t["id"] for t in _teams()}
+    if player is None or home not in team_ids or away not in team_ids:
+        return None
+    dates = [(start - timedelta(days=d)).date().isoformat() for d in (0, 1)]
+    data = _get("/stats", {"player_ids[]": player["id"], "dates[]": dates, "per_page": 100})["data"]
+    for stat in data:
+        game = stat["game"]
+        if game["home_team_id"] == team_ids[home] and game["visitor_team_id"] == team_ids[away]:
+            if not stat.get("min"):
+                return DID_NOT_PLAY
+            row = _to_row(stat)
+            row["PRA"] = row["PTS"] + row["REB"] + row["AST"]
+            return int(row[column])
+    return DID_NOT_PLAY

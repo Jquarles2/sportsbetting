@@ -194,3 +194,90 @@ def test_untrained_nba_model_has_no_tilt_so_it_matches_the_market():
     assert (legs["P"] - legs["P_MARKET"]).abs().max() < 1e-9
     spread = legs[legs["MARKET"] == "Spread"].set_index("TEAM")
     assert spread.loc["Hawks", "P"] == pytest.approx(0.5217, abs=1e-3)  # -120 implies 54.5% and +100 implies 50%; without the vig it's 52.2%, not a flat 50%
+
+
+# --- player props as parlay legs ---
+
+def props_table(*rows):
+    cols = ["PLAYER", "GAME", "BOOK", "LINE", "OVER", "UNDER", "START"]
+    return pd.DataFrame([(p, g, "FanDuel", line, o, u, "2099-01-01T00:00:00Z") for p, g, line, o, u in rows], columns=cols)
+
+
+def scan_table(**values):
+    return pd.DataFrame({"PLAYER": list(values), "GAME": "x", "LINE": 0.0, "VALUES": list(values.values())})
+
+
+def test_prop_legs_use_the_books_fair_odds_and_record_the_hit_rate():
+    props = props_table(("Wide Out", "Owls @ Hawks", 60.5, -200, 170))
+    scan = scan_table(**{"Wide Out": [80, 75, 90, 70, 65, 62, 100, 40, 85, 90, 20]})  # 9 of the last 10 over 60.5
+    legs = guru.build_prop_legs(props, scan, "player_reception_yds", "receiving yards", {})
+    over = legs[legs["PICK"] == "Wide Out Over 60.5 receiving yards"].iloc[0]
+    under = legs[legs["PICK"] == "Wide Out Under 60.5 receiving yards"].iloc[0]
+    assert over["MARKET"] == "Prop:player_reception_yds" and over["PLAYER"] == "Wide Out" and pd.isna(over["TEAM"])
+    assert over["P"] == over["P_MARKET"] == pytest.approx(ratings.devig(-200, 170)[0])  # no invented edge
+    assert over["SUPPORT"] == 90 and under["SUPPORT"] == 10
+    assert over["EDGE"] < 0 and over["PRICE"] == -200
+
+
+def test_props_with_thin_history_or_missing_prices_are_skipped():
+    props = props_table(("Few Games", "Owls @ Hawks", 20.5, -110, -110), ("No Price", "Owls @ Hawks", 20.5, None, -110),
+                        ("Fine Guy", "Owls @ Hawks", 20.5, -110, -110), ("Unscanned", "Owls @ Hawks", 20.5, -110, -110))
+    scan = scan_table(**{"Few Games": [30, 30, 30], "No Price": [30] * 10, "Fine Guy": [30] * 10})
+    legs = guru.build_prop_legs(props, scan, "player_points", "points", {})
+    assert set(legs["PLAYER"]) == {"Fine Guy"}
+
+
+def test_injured_players_and_team_flags_reach_prop_legs():
+    props = props_table(("Hurt Guy", "Owls @ Hawks", 20.5, -110, -110), ("Ok Guy", "Owls @ Hawks", 20.5, -110, -110),
+                        ("Boom Guy", "Owls @ Hawks", 20.5, -110, -110))
+    scan = scan_table(**{"Hurt Guy": [30] * 10, "Ok Guy": [30] * 10, "Boom Guy": [30] * 10})
+    injuries = {"Hurt Guy": {"status": "Out", "injury": "Knee"}, "Boom Guy": {"status": "Questionable", "injury": None}}
+
+    def lookup(name):
+        if name == "Ok Guy":
+            raise RuntimeError("injury feed down")  # unknown is not the same as hurt, and must not crash
+        return injuries.get(name)
+
+    team = {"Hawks": [{"reason": "Sam Qb (QB) Out", "severity": "block"}]}
+    severity = guru.build_prop_legs(props, scan, "player_points", "points", {}, lookup).groupby("PLAYER")["SEVERITY"].first()
+    assert severity["Hurt Guy"] == "block" and severity["Boom Guy"] == "warn" and pd.isna(severity["Ok Guy"])
+    with_qb_out = guru.build_prop_legs(props, scan, "player_points", "points", team, lookup)
+    assert (with_qb_out["SEVERITY"] == "block").all()  # a quarterback out in the game blocks every prop in it
+
+
+def test_props_must_be_consistent_for_the_risk_level_and_respect_your_list():
+    # Fair chance 64% on the over, so the price clears Safe's 60% bar; only the hit rate differs.
+    props = props_table(("Steady", "Owls @ Hawks", 50.5, -200, 170), ("Streaky", "Bears @ Lions", 50.5, -200, 170))
+    scan = scan_table(Steady=[60] * 9 + [10], Streaky=[60] * 7 + [10] * 3)  # 90% vs 70% over
+    legs = guru.build_prop_legs(props, scan, "player_points", "points", {})
+    legs = guru.apply_user_list(legs, [])
+    safe = guru.build_parlay(legs, "Safe", 2)
+    assert set(safe["legs"]["PLAYER"]) == {"Steady"}            # Streaky's 70% is under Safe's 80% bar
+    both = guru.build_parlay(legs, "Balanced", 2)["legs"]
+    assert set(both["PLAYER"]) == {"Steady", "Streaky"}          # Balanced accepts 70%
+    blocked = guru.apply_user_list(legs, [("player", "steady")])
+    assert blocked[blocked["PLAYER"] == "Steady"]["USER_REASON"].eq("Your list: Steady").all()
+    assert guru.build_parlay(blocked, "Balanced", 2)["legs"]["PLAYER"].tolist() == ["Streaky"]
+
+
+def test_a_dead_injury_feed_is_asked_once_not_for_every_prop():
+    props = props_table(*[(f"Player {i}", "Owls @ Hawks", 20.5, -110, -110) for i in range(40)])
+    scan = scan_table(**{f"Player {i}": [30] * 10 for i in range(40)})
+    asked = []
+
+    def dead(name):
+        asked.append(name)
+        raise RuntimeError("plan doesn't include injuries")
+
+    legs = guru.build_prop_legs(props, scan, "player_points", "points", {}, dead)
+    assert len(legs) == 80 and asked == ["Player 0", "Player 1", "Player 2"]  # three doomed calls, not 40
+    assert legs["SEVERITY"].isna().all()                         # unknown is not flagged as hurt
+    assert legs.attrs["unchecked"] == 40                          # but the page can say it couldn't check them
+
+
+def test_each_players_injury_is_looked_up_once_even_though_he_has_two_legs():
+    props = props_table(("A", "Owls @ Hawks", 20.5, -110, -110), ("B", "Owls @ Hawks", 20.5, -110, -110))
+    scan = scan_table(A=[30] * 10, B=[30] * 10)
+    asked = []
+    guru.build_prop_legs(props, scan, "player_points", "points", {}, lambda n: asked.append(n))
+    assert sorted(asked) == ["A", "B"]

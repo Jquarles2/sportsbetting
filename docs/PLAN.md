@@ -24,6 +24,10 @@ Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carrie
 10. **Durable storage** (Supabase): no-bet list, results record and Odds API answers survive restarts;
     local SQLite fallback when Supabase isn't configured; "Check storage connection" in the app.
 
+11. **Props as parlay legs, lotto of the day, API savings**: prop legs in BetGuru (book's fair odds, consistency
+    filters, injury flags, graded from stat lines); a lotto ticket mixing sports; betting-day cache, per-game
+    props cache, NFL props default to today, started games never bought.
+
 ## Next
 
 1. Connect a real Supabase project and verify it live (code is tested against a fake only).
