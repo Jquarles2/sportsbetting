@@ -5,7 +5,8 @@ import pandas as pd
 import pytest
 from streamlit.testing.v1 import AppTest
 
-from src import cache, claude, nobet, odds, results, ui_betguru, ui_common
+from src import cache, claude, nobet, odds, results, store, ui_betguru, ui_common
+from tests.fake_supabase import FakeSupabase
 
 APP = str(Path(__file__).resolve().parent.parent / "app.py")
 
@@ -27,8 +28,7 @@ FORM = {"Hawks": STRONG, "Owls": WEAK, "Bears": STRONG, "Lions": WEAK, "Cubs": S
 @pytest.fixture(autouse=True)
 def fakes(tmp_path, monkeypatch):
     monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
-    monkeypatch.setattr(nobet, "DB_PATH", tmp_path / "s.db")
-    monkeypatch.setattr(results, "DB_PATH", tmp_path / "s.db")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "s.db")
     monkeypatch.setattr(odds, "requests_remaining", lambda: 400)
     monkeypatch.setattr(odds, "count_games", lambda sport, hours: 3)
     monkeypatch.setattr(odds, "get_game_lines", lambda sport, hours: (LINES, "397"))
@@ -121,3 +121,36 @@ def test_no_lines_yet_is_handled(monkeypatch):
     at = run()
     click(at, "Build today's NFL slate")
     assert not at.exception and any("No FanDuel game lines" in i.value for i in at.info)
+
+
+def test_local_storage_warns_that_it_is_temporary():
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert any("wiped when the app restarts" in w.value for w in at.warning)
+    click(at, "Check storage connection")
+    assert any(m.value == "Storage works." for m in at.success)
+
+
+def test_supabase_storage_is_used_and_reported(monkeypatch):
+    fake = FakeSupabase()
+    monkeypatch.setattr(store.requests, "request", fake.request)
+    monkeypatch.setattr(store, "get_secret", lambda name: {"SUPABASE_URL": fake.url, "SUPABASE_KEY": fake.key}.get(name))
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert any("saved in Supabase" in s.value for s in at.success)
+    at.radio(key="bg_nb_kind").set_value("team").run()
+    at.selectbox(key="bg_nb_team").select("Hawks").run()
+    click(at, "Add to my list")
+    assert fake.rows["nobet"] == [{"kind": "team", "name": "Hawks"}]
+    click(at, "Save this parlay")
+    assert len(fake.rows["picks_log"]) >= 1 and not at.exception
+
+
+def test_broken_storage_refuses_to_build_a_parlay_rather_than_ignore_your_list(monkeypatch):
+    def down():
+        raise store.StoreError("Couldn't reach Supabase: timeout")
+    monkeypatch.setattr(nobet, "list_items", down)
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert not at.exception and not at.metric
+    assert any("won't build a parlay" in e.value and "timeout" in e.value for e in at.error)

@@ -45,6 +45,7 @@ Keys (all in `.streamlit/secrets.toml`, which is git-ignored):
 | `ODDS_API_KEY` | the-odds-api.com (free: ~500 requests/month) | all lines and props |
 | `BALLDONTLIE_API_KEY` | balldontlie.io (paid plan for stats) | NBA stats |
 | `ANTHROPIC_API_KEY` | console.anthropic.com (pay as you go) | AI write-ups and game talks (optional) |
+| `SUPABASE_URL`, `SUPABASE_KEY` | supabase.com (free), see below | keeping your data across restarts (optional) |
 
 ## Tests
 
@@ -81,10 +82,39 @@ Downloads nflverse games, tunes on 2012-2023, checks on 2024-2025 and writes `da
    **Settings → Sharing**, choose *Only specific people can view this app* and add emails.
 
 Notes:
-- The SQLite files in `data/` live on the server's disk, which is wiped whenever the app restarts or
-  sleeps. The cache just refills, but your no-bet list and results record are lost (a hosted database is
-  the planned fix).
+- Without Supabase, the SQLite files in `data/` live on the server's disk, which is wiped whenever the app
+  restarts or sleeps: you'd lose your no-bet list and results record and re-spend Odds API requests.
+  Connect Supabase (next section) to prevent that.
 - To update the app, merge to `main`. Streamlit redeploys automatically.
+
+## Durable storage with Supabase (free)
+
+Supabase gives you a small hosted database. BetGuru uses it for three things: your **no-bet list**, your
+**results record**, and the **Odds API answers** (so a restart doesn't re-spend your monthly requests).
+Without it, everything still works but is wiped on restart.
+
+1. Create a free account at <https://supabase.com> and click **New project** (any name, any region, set
+   a database password and keep it somewhere safe; BetGuru doesn't need it).
+2. Open **SQL Editor → New query**, paste the whole of `docs/supabase_setup.sql`, and click **Run**. It
+   creates three tables and locks them so only your secret key can read or write them.
+3. Open **Project Settings → API** (the page may be called **API Keys**). Copy the **Project URL** and the
+   **secret** key (older projects call it **service_role**). Do not use the "anon" or "publishable" key.
+4. Put them in your secrets, either `.streamlit/secrets.toml` locally or **Manage app → Settings → Secrets**
+   on Streamlit Cloud:
+   ```toml
+   SUPABASE_URL = "https://your-project-id.supabase.co"
+   SUPABASE_KEY = "your-secret-key"
+   ```
+5. Reboot the app. On the **BetGuru** tab, open **No-bet list** (or **Model and record**) and press
+   **Check storage connection**. You should see "Storage works", and a green box saying your data is saved
+   in Supabase. Any problem shows up there in plain words (wrong key, tables not created, can't connect).
+
+Good to know:
+- The secret key can read and write everything in your project. Treat it like a password: keep it only in
+  secrets, never in the code or in a chat.
+- Supabase's free plan pauses a project after about a week with no use. If the app says it can't reach
+  Supabase, open the Supabase dashboard and click **Restore project**.
+- Everyone who can open your app shares the same no-bet list and record.
 
 ## Project layout
 

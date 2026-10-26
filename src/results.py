@@ -4,40 +4,27 @@ This is how the app "learns from results": every suggested leg is stored with th
 gave it, then graded once the game is final. The record and the calibration table (did "60%" legs
 really hit about 60% of the time?) show whether the model deserves any trust.
 
-Stored in data/state.db next to the no-bet list. On Streamlit Cloud that file is wiped when the app
-restarts, so the record is only as durable as the running app until we add a hosted database.
+Saved through src/store.py: in Supabase when it's configured (survives restarts), otherwise in a local
+file that a cloud restart wipes.
 """
-import sqlite3
 from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
-from src import nobet
+from src import store
 
-DB_PATH = nobet.DB_PATH
-SCHEMA = """CREATE TABLE IF NOT EXISTS picks_log (
-    id INTEGER PRIMARY KEY, logged_on TEXT, sport TEXT, risk TEXT, game TEXT, start TEXT,
-    market TEXT, pick TEXT, team TEXT, line REAL, price REAL, p REAL,
-    result TEXT DEFAULT 'pending', graded_on TEXT,
-    UNIQUE (logged_on, sport, risk, game, market, pick))"""
-
-
-def _connect():
-    DB_PATH.parent.mkdir(exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute(SCHEMA)
-    return conn
+COLUMNS = ["id", "logged_on", "sport", "risk", "game", "start", "market", "pick", "team", "line",
+           "price", "p", "result", "graded_on"]
 
 
 def log_parlay(sport, risk, legs):
     """Save a suggested parlay's legs. Logging the same parlay twice in a day does nothing."""
-    with _connect() as conn:
-        for leg in legs.itertuples():
-            conn.execute(
-                "INSERT OR IGNORE INTO picks_log (logged_on, sport, risk, game, start, market, pick, team, line, price, p)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (date.today().isoformat(), sport, risk, leg.GAME, leg.START, leg.MARKET, leg.PICK,
-                 leg.TEAM, None if pd.isna(leg.LINE) else float(leg.LINE), float(leg.PRICE), float(leg.P)))
+    today = date.today().isoformat()
+    rows = [{"logged_on": today, "sport": sport, "risk": risk, "game": leg.GAME, "start": leg.START,
+             "market": leg.MARKET, "pick": leg.PICK, "team": None if pd.isna(leg.TEAM) else leg.TEAM,
+             "line": None if pd.isna(leg.LINE) else float(leg.LINE), "price": float(leg.PRICE),
+             "p": float(leg.P)} for leg in legs.itertuples()]
+    store.get_store().picks_add(rows)
 
 
 def grade_leg(market, pick, team, line, home, away, home_score, away_score):
@@ -58,32 +45,26 @@ def grade_pending(get_final, now=None):
     isn't final (or can't be found). Games that started under 5 hours ago are left alone.
     """
     now = now or datetime.now(timezone.utc)
-    graded = 0
-    finals = {}
-    with _connect() as conn:
-        pending = conn.execute(
-            "SELECT id, sport, game, start, market, pick, team, line FROM picks_log WHERE result = 'pending'"
-        ).fetchall()
-        for pid, sport, game, start, market, pick, team, line in pending:
-            started = datetime.fromisoformat(start.replace("Z", "+00:00"))
-            if now - started < timedelta(hours=5):
-                continue
-            away, home = game.split(" @ ")
-            if (sport, game) not in finals:  # several legs can share a game; look it up once
-                finals[(sport, game)] = get_final(sport, home, away, started)
-            final = finals[(sport, game)]
-            if final is None:
-                continue
-            result = grade_leg(market, pick, team, line, home, away, *final)
-            conn.execute("UPDATE picks_log SET result = ?, graded_on = ? WHERE id = ?",
-                         (result, date.today().isoformat(), pid))
-            graded += 1
+    db = store.get_store()
+    graded, finals = 0, {}
+    for leg in db.picks_pending():
+        started = datetime.fromisoformat(leg["start"].replace("Z", "+00:00"))
+        if now - started < timedelta(hours=5):
+            continue
+        away, home = leg["game"].split(" @ ")
+        if (leg["sport"], leg["game"]) not in finals:  # several legs can share a game; look it up once
+            finals[(leg["sport"], leg["game"])] = get_final(leg["sport"], home, away, started)
+        final = finals[(leg["sport"], leg["game"])]
+        if final is None:
+            continue
+        result = grade_leg(leg["market"], leg["pick"], leg["team"], leg["line"], home, away, *final)
+        db.picks_grade(leg["id"], result, date.today().isoformat())
+        graded += 1
     return graded
 
 
 def _legs():
-    with _connect() as conn:
-        return pd.read_sql_query("SELECT * FROM picks_log", conn)
+    return pd.DataFrame(store.get_store().picks_all(), columns=COLUMNS)
 
 
 def record():

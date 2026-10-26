@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src import analysis, games, nobet, odds, picks, stats_nba, stats_nfl, writeups
+from src import analysis, games, nobet, odds, picks, stats_nba, stats_nfl, store, writeups
 from src.ui_betguru import render_betguru
 from src.ui_common import load_cost, quota_left, show_cost
 
@@ -88,7 +88,11 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label, cost, g
 
         st.subheader(f"Best 5/5 parlay: {stat_label}")
         found = picks.find_picks(scan)
-        blocked = nobet.names("player")  # players on your no-bet list never make a parlay
+        try:
+            blocked = nobet.names("player")  # players on your no-bet list never make a parlay
+        except store.StoreError as e:
+            blocked = set()
+            st.warning(f"Couldn't load your no-bet list, so it isn't applied to this parlay: {e}")
         if blocked:
             found = found[~found["PLAYER"].str.lower().isin(blocked)]
         if found.empty:

@@ -1,7 +1,7 @@
 import pandas as pd
 import pytest
 
-from src import guru, nobet, odds, ratings, stats_nfl
+from src import guru, nobet, odds, ratings, stats_nfl, store
 
 P = {**ratings.DEFAULTS["nfl"], "k_spread": 0.1, "k_total": 0.05, "k_ml": 0.1}
 
@@ -145,7 +145,7 @@ def test_not_enough_legs_gives_a_message_not_a_crash():
 
 
 def test_user_nobet_store(tmp_path, monkeypatch):
-    monkeypatch.setattr(nobet, "DB_PATH", tmp_path / "state.db")
+    monkeypatch.setattr(store, "DB_PATH", tmp_path / "state.db")
     assert nobet.list_items() == []
     assert nobet.add("team", "  Kansas   City Chiefs ") and nobet.add("player", "Sam Qb")
     assert not nobet.add("team", "   ") and not nobet.add("fish", "x")
