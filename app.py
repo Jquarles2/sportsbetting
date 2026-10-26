@@ -29,18 +29,17 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label):
         st.info("No FanDuel props posted yet for these games.")
         return props
 
-    with st.expander("FanDuel lines"):
+    with st.expander(f"FanDuel {stat_label} lines"):
         st.dataframe(props, hide_index=True)
 
-    st.subheader("Props dashboard")
-    st.caption("Scans every player's recent games against FanDuel's line. Stats are cached for the "
-               "day, and the filters below cost nothing.")
+    st.subheader(f"Props dashboard: {stat_label}")
+    st.caption(f"Scans every player's recent games against FanDuel's {stat_label} line. Stats are "
+               "cached for the day, and the filters below cost nothing.")
     if st.button("Scan players", key=f"{key}_scan_btn"):
         bar = st.progress(0.0, text="Scanning players...")
         st.session_state[f"{key}_scan"] = picks.scan_players(
             props, get_values,
             progress=lambda done, total: bar.progress(done / total, text=f"{done}/{total} players"),
-            pause=1.0 if key == "nba" else 0,  # NBA stats come from a rate-limited API
         )
         bar.empty()
 
@@ -63,11 +62,11 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label):
         if search:
             table = table[table["PLAYER"].str.contains(search, case=False)]
         table = table.sort_values(window, ascending=False).reset_index(drop=True)
-        st.caption(f"{len(table)} props. L5/L10/L20 = % of last 5/10/20 games {side.lower()} the line. "
-                   "Click a column header to re-sort.")
+        st.caption(f"{len(table)} {stat_label} props. L5/L10/L20 = % of the last 5/10/20 games where "
+                   f"{stat_label} went {side.lower()} the line. Click a column header to re-sort.")
         st.dataframe(table, hide_index=True)
 
-        st.subheader("Best 5/5 parlay")
+        st.subheader(f"Best 5/5 parlay: {stat_label}")
         found = picks.find_picks(scan)
         if found.empty:
             st.info("No player went 5/5 against these lines.")
@@ -165,23 +164,30 @@ with nba_tab:
             else:
                 st.dataframe(logs, hide_index=True)
 
-    st.header("Today's NBA points props")
-    st.caption("Each load uses Odds API requests (free plan: ~500/month), so it's cached for the day.")
+    st.header("Today's NBA props")
+    nba_market = st.selectbox(
+        "Prop type", list(stats_nba.MARKETS), format_func=lambda m: stats_nba.MARKETS[m][1].title(),
+        key="nba_market",
+    )
+    nba_column, nba_label = stats_nba.MARKETS[nba_market]
+    st.caption("Loading uses about 1 Odds API request per game today for the chosen prop type "
+               "(free plan: ~500/month), then it's cached for the day. Player stats are shared by "
+               "all prop types, so switching type doesn't re-fetch them.")
     props = props_dashboard(
-        "nba",
-        load_props=lambda: odds.get_todays_props(odds.NBA, "player_points", hours=24),
-        get_values=stats_nba.get_recent_points,
-        stat_label="points",
-        load_label="Load today's props",
+        f"nba_{nba_market}",
+        load_props=lambda: odds.get_todays_props(odds.NBA, nba_market, hours=24),
+        get_values=lambda player: stats_nba.get_recent_values(player, nba_market),
+        stat_label=nba_label,
+        load_label=f"Load today's {nba_label} props",
     )
 
     if props is not None and not props.empty:
         st.subheader("Hit rates for one player")
-        st.caption("Uses 2 balldontlie requests per new player.")
+        st.caption("Uses up to 3 balldontlie requests per new player.")
         player = st.selectbox("Player", sorted(props["PLAYER"].unique()))
         player_lines = props[props["PLAYER"] == player]["LINE"].dropna()
         default_line = float(player_lines.median()) if len(player_lines) else 20.5
-        line = st.number_input("Points line", value=default_line, step=0.5)
+        line = st.number_input(f"{nba_label.capitalize()} line", value=default_line, step=0.5)
         if st.button("Show hit rates"):
             try:
                 logs = stats_nba.get_game_logs(player, n=20)
@@ -191,7 +197,7 @@ with nba_tab:
                 if logs is None or logs.empty:
                     st.warning(f"No game logs found for {player}.")
                 else:
-                    st.dataframe(analysis.hit_rates(logs, line), hide_index=True)
+                    st.dataframe(analysis.hit_rates(logs, line, nba_column), hide_index=True)
 
     st.header("NBA moneylines, spreads and totals")
     st.caption("Loading costs about 3 Odds API requests for every game at once, cached for the day.")
@@ -199,7 +205,7 @@ with nba_tab:
         "nba",
         load_lines=lambda: odds.get_game_lines(odds.NBA, hours=24),
         get_team_games=stats_nba.get_team_games,
-        pause=1.0,  # balldontlie is rate limited
+        pause=0,  # stats_nba already spaces its calls to respect the rate limit
     )
 
 with nfl_tab:
