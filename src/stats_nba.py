@@ -4,13 +4,13 @@ nba_api (stats.nba.com) blocks cloud hosts like Streamlit Community Cloud, so we
 balldontlie instead. It needs a free API key, stored as BALLDONTLIE_API_KEY in
 .streamlit/secrets.toml locally, or in the app's Secrets settings on Streamlit Cloud.
 """
-import os
 from datetime import date
 
 import pandas as pd
 import requests
 
 from src import cache
+from src.config import get_secret
 
 BASE_URL = "https://api.balldontlie.io/v1"
 # Columns we show, in order.
@@ -18,13 +18,7 @@ LOG_COLUMNS = ["GAME_DATE", "HOME_AWAY", "MIN", "PTS", "REB", "AST", "FG3M"]
 
 
 def get_api_key():
-    """Read the key from Streamlit secrets, falling back to an environment variable."""
-    try:
-        import streamlit as st
-
-        return st.secrets["BALLDONTLIE_API_KEY"]
-    except Exception:
-        return os.environ.get("BALLDONTLIE_API_KEY")
+    return get_secret("BALLDONTLIE_API_KEY")
 
 
 def _get(path, params):

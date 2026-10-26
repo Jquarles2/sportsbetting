@@ -1,6 +1,6 @@
 import streamlit as st
 
-from src import stats_nba
+from src import odds, stats_nba
 
 st.set_page_config(page_title="Props Research", page_icon="🏀")
 
@@ -22,3 +22,17 @@ if submitted and name:
             st.warning(f"No NBA player found matching '{name}'.")
         else:
             st.dataframe(logs, hide_index=True)
+
+st.header("Today's NBA points props")
+st.caption("Each load uses Odds API requests (free plan: ~500/month), so it's cached for the day.")
+if st.button("Load today's props"):
+    try:
+        props, remaining = odds.get_todays_props()
+    except Exception as e:
+        st.error(f"Couldn't load props right now: {e}")
+    else:
+        if props.empty:
+            st.info("No player-points props posted yet for games in the next 24 hours.")
+        else:
+            st.dataframe(props, hide_index=True)
+        st.caption(f"Odds API requests remaining this month: {remaining}")
