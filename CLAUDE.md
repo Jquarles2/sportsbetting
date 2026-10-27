@@ -13,9 +13,8 @@ Two halves:
 
 ## Where things stand (as of 2026-10-28)
 - Deployed on Streamlit Community Cloud from `main` (app URL looks like `bettingbotbot.streamlit.app`; confirm in the
-  owner's dashboard at share.streamlit.io). PRs #1–#17 are merged. Line movement and the
-  props-tab Refresh button are on branch `claude/odds-props` and not merged until the owner asks for a PR (check
-  `git log origin/main`).
+  owner's dashboard at share.streamlit.io). PRs #1–#18 are merged, so `main` has everything
+  described here (including line movement and the props-tab Refresh button).
 - Supabase is connected to a real project and working (the owner created the tables with
   `docs/supabase_setup.sql`; the NFL slate only builds when the no-bet list loads, and it does).
 - The owner has the Odds API free plan (~500 requests/month), a paid $10 balldontlie plan, an Anthropic key
