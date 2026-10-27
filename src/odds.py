@@ -170,9 +170,13 @@ def refresh_game_lines(sport):
         f"/sports/{sport}/odds",
         {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
     )
-    rows = [parse_game_lines(e) for e in events]  # keep them all; the window is applied when reading
-    cached = {"rows": [r for r in rows if r], "remaining": remaining,
-              "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    rows = [r for r in (parse_game_lines(e) for e in events) if r]  # keep them all; the window is applied when reading
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    before = cache.get(lines_cache_key(sport))
+    # The first pull of the day is the "opening" line that later pulls are compared with (see line_moves).
+    opening = (before.get("opening") or {"pulled_at": before.get("pulled_at"), "rows": before["rows"]}) if before \
+        else {"pulled_at": now, "rows": rows}
+    cached = {"rows": rows, "remaining": remaining, "pulled_at": now, "opening": opening}
     cache.put(lines_cache_key(sport), cached)
     return cached
 
@@ -183,6 +187,35 @@ def lines_pulled_at(sport):
     if not cached or not cached.get("pulled_at"):
         return None  # not loaded today, or saved before we started keeping the time
     return datetime.fromisoformat(cached["pulled_at"])
+
+
+MOVE_COLUMNS = ["GAME", "SPREAD_OPEN", "SPREAD_NOW", "TOTAL_OPEN", "TOTAL_NOW", "HOME_ML_OPEN", "HOME_ML_NOW",
+                "CHANGED"]
+_PRICE_FIELDS = ["ML_HOME", "ML_AWAY", "SPREAD_HOME", "SPREAD_HOME_PRICE", "SPREAD_AWAY_PRICE", "TOTAL", "OVER", "UNDER"]
+
+
+def line_moves(sport, hours=24):
+    """Games on the slate whose lines changed since the first pull today (free: cache only).
+
+    SPREAD is the home team's number. CHANGED lists every field that moved, so a price change with the same
+    number (-110 to -125) still shows. Returns an empty table if lines were pulled only once, or not at all.
+    """
+    cached = cache.get(lines_cache_key(sport))
+    if not cached or not cached.get("opening"):
+        return pd.DataFrame(columns=MOVE_COLUMNS)
+    first = {r["GAME"]: r for r in cached["opening"]["rows"]}
+    rows = []
+    for now in cached["rows"]:
+        old = first.get(now["GAME"])
+        if old is None or not _in_window(now["START"], hours, grace_hours=0):
+            continue
+        changed = [f for f in _PRICE_FIELDS if old.get(f) != now.get(f)]
+        if changed:
+            rows.append({"GAME": now["GAME"], "SPREAD_OPEN": old.get("SPREAD_HOME"), "SPREAD_NOW": now.get("SPREAD_HOME"),
+                         "TOTAL_OPEN": old.get("TOTAL"), "TOTAL_NOW": now.get("TOTAL"),
+                         "HOME_ML_OPEN": old.get("ML_HOME"), "HOME_ML_NOW": now.get("ML_HOME"),
+                         "CHANGED": ", ".join(changed)})
+    return pd.DataFrame(rows, columns=MOVE_COLUMNS)
 
 
 # --- Free calls: The Odds API doesn't charge for /sports or for listing a sport's events. ---

@@ -253,3 +253,36 @@ def test_lines_age_text():
         "FanDuel lines pulled at 9:05 AM Eastern (40 min ago)."
     assert "(2 h 10 min ago)" in lines_age_text(pulled, now=datetime(2026, 1, 5, 16, 15, tzinfo=timezone.utc))
     assert "exact time wasn't saved" in lines_age_text(None)
+
+
+def test_line_moves_compare_with_the_first_pull_of_the_day(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    g = game_json()
+    moved = {**game_json(), "bookmakers": [{**g["bookmakers"][0], "markets": [
+        m if m["key"] != "totals" else {"key": "totals", "outcomes": [
+            {"name": "Over", "price": -110, "point": 223.5}, {"name": "Under", "price": -110, "point": 223.5}]}
+        for m in g["bookmakers"][0]["markets"]]}]}
+    answers = [[g], [moved]]
+    monkeypatch.setattr(odds, "_get", lambda path, params: (answers.pop(0), "497"))
+    wide = 24 * 365 * 100  # the sample game is in 2099
+    assert odds.line_moves(odds.NBA, wide).empty      # nothing loaded
+    odds.get_game_lines(odds.NBA, hours=24)           # first pull = the opening line
+    assert odds.line_moves(odds.NBA, wide).empty      # nothing has moved yet
+    odds.refresh_game_lines(odds.NBA)
+    moves = odds.line_moves(odds.NBA, wide)
+    assert list(moves["GAME"]) == ["New York Knicks @ Boston Celtics"]
+    assert (moves["TOTAL_OPEN"][0], moves["TOTAL_NOW"][0]) == (221.5, 223.5)
+    assert moves["SPREAD_OPEN"][0] == moves["SPREAD_NOW"][0]
+
+
+def test_line_moves_catches_price_only_changes(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    before = {"GAME": "A @ B", "START": "2099-01-01T00:00:00Z", "SPREAD_HOME": -3.5, "SPREAD_HOME_PRICE": -110,
+              "TOTAL": 44.5, "ML_HOME": -150}
+    after = {**before, "SPREAD_HOME_PRICE": -125}
+    started = {**before, "GAME": "C @ D", "START": "2000-01-01T00:00:00Z"}
+    cache.put(odds.lines_cache_key(odds.NFL), {"rows": [after, {**started, "TOTAL": 40.0}], "remaining": "1",
+                                               "opening": {"pulled_at": None, "rows": [before, started]}})
+    moves = odds.line_moves(odds.NFL, hours=24 * 365 * 100)
+    assert list(moves["GAME"]) == ["A @ B"]  # the game that already started isn't on the slate
+    assert moves["CHANGED"][0] == "SPREAD_HOME_PRICE" and moves["SPREAD_OPEN"][0] == moves["SPREAD_NOW"][0]

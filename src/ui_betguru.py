@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src import games, guru, lotto, nobet, odds, ratings, results, stats_nba, stats_nfl, store, talks
-from src.ui_common import lines_age_text, load_cost, quota_left, show_cost
+from src.ui_common import REFRESH_COST, lines_age_text, load_cost, quota_left, show_cost
 
 # What differs between sports: where the lines come from, how far ahead to look, and where each
 # team's recent games, injuries and final scores come from. NBA injuries aren't wired up yet.
@@ -84,12 +84,13 @@ def build_slate(cfg):
             "pulled_at": odds.lines_pulled_at(cfg["odds"])}
 
 
-REFRESH_COST = 3  # moneyline, spread and total: one request each, however many games
-
-
 def refresh_slate(cfg, key, state):
     """Say how old the lines are, with a button to buy fresh ones and rebuild the slate. Returns the slate to use."""
     st.caption(lines_age_text(state.get("pulled_at")) + " Lines move during the day, so refresh before you bet.")
+    newest = odds.lines_pulled_at(cfg["odds"])
+    if newest and state.get("pulled_at") and newest > state["pulled_at"]:  # e.g. refreshed from a props tab
+        st.warning("Newer lines were pulled after this slate was built. Press the build button above (it's free "
+                   "now) so the parlay uses them.")
     left = quota_left()
     too_few = left is not None and left < REFRESH_COST
     if st.button(f"Refresh lines ({REFRESH_COST} Odds API requests)", key=f"{key}_refresh", disabled=too_few):
@@ -102,6 +103,12 @@ def refresh_slate(cfg, key, state):
             st.error(f"Couldn't refresh the lines right now: {e}")
     if too_few:
         st.caption(f"Only {left} Odds API requests left this month, so refreshing is off.")
+    moves = odds.line_moves(cfg["odds"])
+    if not moves.empty:
+        with st.expander(f"Line movement since the first pull today ({len(moves)} games)"):
+            st.dataframe(moves, hide_index=True)
+            st.caption("SPREAD is the home team's number. A line moving doesn't tell you which side is right: "
+                       "it only shows that the price changed since the morning.")
     return state
 
 

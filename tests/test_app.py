@@ -308,3 +308,24 @@ def test_refresh_is_off_when_the_quota_is_too_low(monkeypatch):
     at.run()
     button = next(b for b in at.button if b.label.startswith("Refresh lines"))
     assert button.disabled
+
+
+def test_props_tab_game_lines_have_a_refresh_button(monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(odds, "refresh_game_lines", lambda sport: refreshed.append(sport))
+    at = run()
+    click(at, "Load game lines")  # the first such button is the NBA tab's
+    assert any(c.value.startswith("FanDuel lines were pulled earlier") for c in at.caption)
+    click(at, "Refresh lines")
+    assert not at.exception and refreshed == [odds.NBA]
+
+
+def test_betguru_warns_when_newer_lines_were_pulled_elsewhere(monkeypatch):
+    from datetime import datetime, timedelta, timezone
+    at = run()
+    click(at, "Build today's NFL slate")
+    state = at.session_state["bg_nfl_state"]
+    state["pulled_at"] = datetime.now(timezone.utc) - timedelta(hours=1)
+    monkeypatch.setattr(odds, "lines_pulled_at", lambda sport: datetime.now(timezone.utc))
+    at.run()
+    assert any("Newer lines were pulled" in w.value for w in at.warning)
