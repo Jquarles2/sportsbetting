@@ -7,6 +7,9 @@ import streamlit as st
 from src import cache, odds
 
 
+REFRESH_COST = 3  # refreshing the game lines: moneyline, spread and total, one request each
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def quota_left():
     """Odds API requests left this month, or None if we can't tell. Free to ask; cached 5 minutes."""

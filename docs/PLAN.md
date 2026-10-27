@@ -29,10 +29,18 @@ Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carrie
 12. **Today-only slates, combined slates, legs per game**: the NFL slate is the next 24 hours (not started);
     parlays combine every built slate; 1 to 3 legs per game with near-duplicate pairs blocked; Supabase
     connected to a real project and working.
+13. **Code review fixes**: saved parlays use the betting day and one ticket per risk per day (a different second
+    parlay is refused, not merged); NBA name lookup handles Jr/III and initials; zero-minute NBA lines are
+    did-not-play; NFL grading re-downloads scores when a game is missing.
+14. **Lines age, Refresh button, line movement**: the slate says when lines were pulled; "Refresh lines" re-buys
+    them (3 requests) on the BetGuru and props tabs; a table shows what moved since the day's first pull (spread,
+    total, any price). BetGuru warns if newer lines were pulled after its slate was built.
 
 ## Next
 
-1. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots, now possible in Supabase).
+1. **Morning pre-warm** (needs a scheduled job; Streamlit Cloud can't run one, so GitHub Actions or the owner's
+   machine). Line movement only compares the first and latest pull of the day; a full history of snapshots
+   (across days) isn't kept yet.
 2. **Verify live**: prop-leg grading, NBA `/player_injuries`, NBA finals (`/games`), and how FanDuel really prices a
    same-game parlay versus the product of odds we show. Then NBA team injury flags and opponent-defense matchups.
 3. ~~**Show when lines were pulled** and offer a refresh button~~ Done on the BetGuru tab (3 requests a refresh).

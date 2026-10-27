@@ -8,6 +8,9 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 - Loads FanDuel moneylines, spreads and totals for today's games: those starting in the next 24 hours that
   haven't kicked off yet (both sports).
 - Scans each team's recent games and, for the NFL, the weekly injury report.
+- **Shows how old the lines are** ("pulled at 9:05 AM Eastern, 2 h ago") with a **Refresh lines** button
+  (3 Odds API requests), and a **line movement** table: which games' spread, total or prices changed since the
+  first pull of the day. The props tabs' game-lines section has the same time and button.
 - **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive), a leg count, and **legs per game**
   (1 to 3, default 2). It never uses a leg it doesn't trust, and it shows the expected value at fair odds
   (always negative: the sportsbook takes a cut on every leg, and the cut multiplies with each leg).
@@ -67,7 +70,7 @@ Everything is built around spending as little as possible. What costs requests, 
 | Action | Cost |
 |---|---|
 | Game lines (moneyline, spread, total) for a sport | **3**, once per betting day per sport |
-| "Refresh lines" on the BetGuru tab (fresh prices for the sport you're on) | **3** each time you press it |
+| "Refresh lines" (BetGuru tab or a props tab; fresh prices for that sport) | **3** each time you press it |
 | Player props, one prop type | **1 per game** that you haven't already bought today |
 | Quota balance, game counts, cost estimates | free |
 | Scanning players or teams, parlays, the lotto, game talks, write-ups, grading, filters | free (they use stats sources or Claude, not the Odds API) |
@@ -104,7 +107,7 @@ plans with far more requests (check their pricing page).
 python -m pytest
 ```
 
-About 175 tests, none need the network. `tests/test_app.py` runs the whole app headlessly with fake data.
+About 185 tests, none need the network. `tests/test_app.py` runs the whole app headlessly with fake data.
 
 ## Retrain the NFL model
 

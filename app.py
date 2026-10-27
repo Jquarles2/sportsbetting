@@ -2,7 +2,7 @@ import streamlit as st
 
 from src import analysis, games, nobet, odds, picks, stats_nba, stats_nfl, store, writeups
 from src.ui_betguru import render_betguru
-from src.ui_common import load_cost, quota_left, show_cost
+from src.ui_common import REFRESH_COST, lines_age_text, load_cost, quota_left, show_cost
 
 st.set_page_config(page_title="BetGuru", page_icon="🎯")
 
@@ -127,7 +127,7 @@ def props_dashboard(key, load_props, get_values, stat_label, load_label, cost, g
     return props
 
 
-def game_lines_section(key, load_lines, get_team_games, pause, cost):
+def game_lines_section(key, load_lines, get_team_games, pause, cost, sport=None):
     """Moneylines, spreads and totals for the loaded games, plus each team's recent form.
 
     Form means: how often the team's last games would have won, covered today's spread, or gone
@@ -144,6 +144,17 @@ def game_lines_section(key, load_lines, get_team_games, pause, cost):
     if f"{key}_lines" not in st.session_state:
         return
     lines, remaining = st.session_state[f"{key}_lines"]
+    if sport:  # when the lines were bought, and a button to buy fresh ones (3 requests)
+        st.caption(lines_age_text(odds.lines_pulled_at(sport)))
+        left = quota_left()
+        if st.button(f"Refresh lines ({REFRESH_COST} Odds API requests)", key=f"{key}_lines_refresh",
+                     disabled=left is not None and left < REFRESH_COST):
+            try:
+                odds.refresh_game_lines(sport)
+                st.session_state[f"{key}_lines"] = lines, remaining = load_lines()  # cached now, so free
+                quota_left.clear()
+            except Exception as e:
+                st.error(f"Couldn't refresh the lines right now: {e}")
     if lines.empty:
         st.info("No FanDuel game lines posted yet.")
         return
@@ -247,6 +258,7 @@ with nba_tab:
         get_team_games=stats_nba.get_team_games,
         pause=0,  # stats_nba already spaces its calls to respect the rate limit
         cost=lambda: load_cost(odds.NBA, 24),
+        sport=odds.NBA,
     )
 
 with nfl_tab:
@@ -280,4 +292,5 @@ with nfl_tab:
         get_team_games=stats_nfl.get_team_games,
         pause=0,  # results come from one downloaded file
         cost=lambda: load_cost(odds.NFL, window_hours),
+        sport=odds.NFL,
     )

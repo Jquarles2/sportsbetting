@@ -11,9 +11,11 @@ Two halves:
 2. **Props tabs** (NBA props, NFL props): player-prop research — hit rates over the last 5/10/20 games, a sortable
    dashboard, a best 5/5 parlay, and AI write-ups for picks. Loaded props can also feed BetGuru parlays.
 
-## Where things stand (as of 2026-10-27)
+## Where things stand (as of 2026-10-28)
 - Deployed on Streamlit Community Cloud from `main` (app URL looks like `bettingbotbot.streamlit.app`; confirm in the
-  owner's dashboard at share.streamlit.io). PRs #1–#14 are merged; `main` has everything described here.
+  owner's dashboard at share.streamlit.io). PRs #1–#17 are merged. Line movement and the
+  props-tab Refresh button are on branch `claude/odds-props` and not merged until the owner asks for a PR (check
+  `git log origin/main`).
 - Supabase is connected to a real project and working (the owner created the tables with
   `docs/supabase_setup.sql`; the NFL slate only builds when the no-bet list loads, and it does).
 - The owner has the Odds API free plan (~500 requests/month), a paid $10 balldontlie plan, an Anthropic key
@@ -21,8 +23,9 @@ Two halves:
 - Verified live: NFL slate, NBA slate, NBA team games, Supabase storage, pick write-ups (Claude), the Odds API
   quota banner and cost guard.
 - **Not verified live** (tested only against fakes or never run): game talks, prop-leg grading, NBA
-  `/player_injuries`, NBA finals (`stats_nba.get_final`), the lotto and saved-ticket grading, and how FanDuel prices a
-  same-game parlay.
+  `/player_injuries`, NBA finals (`stats_nba.get_final`), the lotto and saved-ticket grading, how FanDuel prices a
+  same-game parlay, the Refresh lines button and line movement against the real Odds API, the NFL scores re-download,
+  and how balldontlie reports a did-not-play stat line (the zero-minute check is a guess at the format).
 
 ## Honest status of the model (read before changing the pitch or any UI copy)
 Backtests on 14 seasons of real NFL historical lines (`scripts/train_weights.py`) found that recent team form adds
@@ -76,8 +79,9 @@ switch the headline back to model chances, and never give props or the NBA a til
 - `app.py`: entry point. Title, Odds API quota banner, three tabs (BetGuru, NBA props, NFL props), and the shared
   `props_dashboard` / `game_lines_section` used by the props tabs. NFL props tab has a Games window (Today default).
 - `src/ui_betguru.py`: the whole BetGuru tab (slate, parlay, lotto, game talks, no-bet list, model and record).
-- `src/ui_common.py`: Odds API quota and "this will cost N requests" helpers (Streamlit-cached).
-- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates).
+- `src/ui_common.py`: Odds API quota, `REFRESH_COST`, "this will cost N requests" and `lines_age_text` helpers.
+- `src/odds.py`: Odds API (props + game lines, cache keys, free-call cost estimates). `refresh_game_lines` always
+  re-buys (3 requests) and keeps the day's first pull as `opening`; `lines_pulled_at` and `line_moves` read the cache only.
 - `src/stats_nba.py`: balldontlie (game logs, team games, finals, injuries, player stat lines). `MARKETS` maps
   points/rebounds/assists/threes/PRA. `src/stats_nfl.py`: nflverse (weekly stats, team results, finals, injuries,
   matchups, player stat lines). `MARKETS` maps passing/rushing/receiving yards and receptions.
@@ -121,7 +125,7 @@ switch the headline back to model chances, and never give props or the NBA a til
 
 ## Commands
 - Run: `streamlit run app.py`
-- Tests: `python -m pytest` (≈175 tests, no network needed, ~15 s)
+- Tests: `python -m pytest` (≈185 tests, no network needed, ~15 s)
 - Retrain the NFL model: `python scripts/train_weights.py` (needs network, ~1 min), then commit the JSON.
 
 ## Workflow notes
@@ -154,16 +158,21 @@ switch the headline back to model chances, and never give props or the NBA a til
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built; NBA injuries are
   per-player only and unverified.
 - No per-user accounts: the no-bet list and record are shared by everyone who opens the app.
-- Lines are cached all day (to save requests). The BetGuru tab shows when they were pulled and has a "Refresh
-  lines" button (3 requests, `odds.refresh_game_lines`, off when fewer than 3 are left); the props tabs' game-lines
-  section has neither yet, and a refresh only re-buys the sport you're on.
+- Lines are cached all day (to save requests). The BetGuru tab and the props tabs show when they were pulled and
+  have a "Refresh lines" button (3 requests, `odds.refresh_game_lines`, off when fewer than 3 are left). A refresh only
+  re-buys that sport, and the BetGuru slate in session state is NOT rebuilt by a props-tab refresh (it warns "Newer
+  lines were pulled" and the owner presses the free build button). Line movement compares only the first and latest
+  pull of the day; there is no multi-day snapshot history.
+- Results: the record keeps one ticket per betting day, sport and risk (`results.TicketExists` if you try a second,
+  different one). Lotto and "(mixed)" tickets are one per day across sports.
 - Phone layout is whatever Streamlit gives by default (owner marked it low priority).
 
 ## Next steps (suggested order)
-1. Morning pre-warm + line-movement snapshots (history can live in Supabase; needs a scheduled job).
+1. Morning pre-warm + a real snapshot history (Supabase; needs a scheduled job: GitHub Actions or the owner's
+   machine, since Streamlit Cloud can't run one). Spending Odds API requests on a schedule needs the owner's OK.
 2. Verify live and fix: prop-leg grading, NBA injuries/finals, lotto saving, same-game parlay pricing. Then NBA team
    injuries and opponent-defense matchups.
-3. (Done: lines pulled-at time + refresh button on the BetGuru tab.)
+3. (Done: lines pulled-at time, Refresh button and same-day line movement.)
 4. Once there are ≥100 graded legs per sport, retrain/recalibrate on the live record (extend `train_weights.py` to
    read `picks_log`) and show calibration over time.
 5. Phone layout polish. REA research is a separate session on the owner's machine.
