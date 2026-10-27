@@ -135,3 +135,26 @@ def test_calls_are_paced(monkeypatch):
     monkeypatch.setattr(stats_nba, "_last_call", stats_nba.time.monotonic())
     stats_nba._wait_for_turn()
     assert sleeps and 0 < sleeps[0] <= stats_nba.MIN_SECONDS_BETWEEN_CALLS
+
+
+def test_find_player_handles_suffixes_and_initials(monkeypatch):
+    searched = []
+    def fake_get(path, params):
+        searched.append(params["search"])
+        return {"data": [{"id": 1, "first_name": "Jaren", "last_name": "Jackson Jr."},
+                         {"id": 2, "first_name": "P.J.", "last_name": "Washington"},
+                         {"id": 3, "first_name": "Gary", "last_name": "Payton II"},
+                         {"id": 4, "first_name": "Gary", "last_name": "Payton"}]}
+    monkeypatch.setattr(stats_nba, "_get", fake_get)
+    assert stats_nba.find_player("Jaren Jackson Jr")["id"] == 1
+    assert searched[-1] == "jackson"  # not "jr", which matches hundreds of players
+    assert stats_nba.find_player("PJ Washington")["id"] == 2
+    assert stats_nba.find_player("Gary Payton")["id"] == 4  # the exact name beats "Gary Payton II"
+    assert stats_nba.find_player("Gary Payton II")["id"] == 3
+
+
+def test_zero_minute_lines_count_as_not_played():
+    assert not stats_nba._played({"min": "00"})
+    assert not stats_nba._played({"min": "0:00"})
+    assert not stats_nba._played({"min": None})
+    assert stats_nba._played({"min": "34"}) and stats_nba._played({"min": "12:30"})

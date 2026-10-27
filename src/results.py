@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 
-from src import store
+from src import cache, store
 
 DID_NOT_PLAY = "dnp"
 COLUMNS = ["id", "logged_on", "sport", "risk", "game", "start", "market", "pick", "team", "line",
@@ -24,16 +24,39 @@ def _who(leg):
     return None if who is None or pd.isna(who) else who
 
 
+class TicketExists(Exception):
+    """A different parlay was already saved today at this risk level (the record can hold one per day)."""
+
+
+def _ticket(day, sport, risk):
+    """Which ticket a saved leg belongs to: one per day and risk, and per sport unless it can mix sports."""
+    return (day, "all", risk) if risk == "Lotto" or risk.endswith("(mixed)") else (day, sport, risk)
+
+
 def log_parlay(sport, risk, legs):
-    """Save a suggested parlay's legs. Logging the same parlay twice in a day does nothing."""
-    today = date.today().isoformat()
+    """Save a suggested parlay's legs. Returns True if saved, False if this exact parlay was already saved.
+
+    The record counts one ticket per betting day and risk level, so a second, different parlay at the same
+    risk would be merged into the first one. That raises TicketExists instead of quietly mixing them.
+    """
+    today = cache.today()  # the betting day (rolls at 5 a.m. Eastern), so an evening save isn't dated tomorrow
     # Prop legs have no team; the "team" column holds the player's name instead (so no schema change).
     # A ticket can mix sports (the lotto): a leg's own SPORT column wins over the `sport` argument.
     rows = [{"logged_on": today, "sport": getattr(leg, "SPORT", None) or sport, "risk": risk, "game": leg.GAME, "start": leg.START,
              "market": leg.MARKET, "pick": leg.PICK, "team": _who(leg),
              "line": None if pd.isna(leg.LINE) else float(leg.LINE), "price": float(leg.PRICE),
              "p": float(leg.P)} for leg in legs.itertuples()]
-    store.get_store().picks_add(rows)
+    db = store.get_store()
+    mine = {_ticket(today, r["sport"], risk) for r in rows}
+    saved = {(r["game"], r["market"], r["pick"]) for r in db.picks_all()
+             if _ticket(r["logged_on"], r["sport"], r["risk"]) in mine}
+    if saved:
+        if saved == {(r["game"], r["market"], r["pick"]) for r in rows}:
+            return False  # already saved
+        raise TicketExists(f"You already saved a different {risk} parlay today, and the record keeps one per "
+                           "risk level a day. Pick another risk level to save this one too.")
+    db.picks_add(rows)
+    return True
 
 
 def grade_leg(market, pick, team, line, home, away, home_score, away_score):
@@ -125,8 +148,7 @@ def parlay_record():
         return {"won": 0, "lost": 0, "pending": 0}
     counts = {"won": 0, "lost": 0, "pending": 0}
     # A lotto ticket, or a parlay saved as "<risk> (mixed)", can span sports: one parlay per day and risk.
-    df = df.assign(ticket=[(d, "all", r) if r == "Lotto" or r.endswith("(mixed)") else (d, sp, r)
-                           for d, sp, r in zip(df["logged_on"], df["sport"], df["risk"])])
+    df = df.assign(ticket=[_ticket(d, sp, r) for d, sp, r in zip(df["logged_on"], df["sport"], df["risk"])])
     for _, g in df.groupby("ticket"):
         if (g["result"] == "loss").any():
             counts["lost"] += 1

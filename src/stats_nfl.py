@@ -6,6 +6,7 @@ No API key needed.
 """
 import io
 import re
+import time
 from datetime import date
 from functools import lru_cache
 
@@ -250,17 +251,47 @@ def get_player_team(name):
     return _team_names().get(rows["team"].iloc[0])
 
 
+RESULTS_REFRESH_SECONDS = 1800  # re-download the scores at most every 30 minutes
+_results_refreshed_at = None
+
+
+def _refresh_results():
+    """Download the scores again, even though today's copy is cached.
+
+    The scores file is cached for the whole day, so a copy saved Sunday morning doesn't have Sunday's games.
+    When grading can't find a finished game we fetch once more, but not more often than every 30 minutes.
+    Returns True if it downloaded.
+    """
+    global _results_refreshed_at
+    if _results_refreshed_at and time.monotonic() - _results_refreshed_at < RESULTS_REFRESH_SECONDS:
+        return False
+    _results_refreshed_at = time.monotonic()
+    cache.put("nfl_results", _download_results())
+    _load_results.cache_clear()  # forget the in-memory copy too
+    return True
+
+
+def _find_game(home, away, start):
+    """The finished game between these teams within 2 days of start, or None (refreshes the scores once)."""
+    def look():
+        df = _load_results(date.today().isoformat())
+        games = df[(df["home"] == home) & (df["away"] == away)]
+        return next((g for g in games.itertuples()
+                     if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2), None)
+
+    game = look()
+    if game is None and _refresh_results():  # maybe today's copy was saved before this game finished
+        game = look()
+    return game
+
+
 def get_final(home, away, start):
     """Final score (home_score, away_score) of a finished game, or None if not final or not found.
 
     start is the kickoff as a datetime; the game is matched by teams and a game day within 2 days.
     """
-    df = _load_results(date.today().isoformat())
-    games = df[(df["home"] == home) & (df["away"] == away)]
-    for g in games.itertuples():
-        if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2:
-            return int(g.home_score), int(g.away_score)
-    return None
+    g = _find_game(home, away, start)
+    return None if g is None else (int(g.home_score), int(g.away_score))
 
 
 DID_NOT_PLAY = "dnp"  # a finished game where the player has no stat line (sportsbooks void these props)
@@ -274,10 +305,7 @@ def get_player_stat(name, market, home, away, start):
     """
     column = MARKETS[market][0]
     today = date.today().isoformat()
-    results = _load_results(today)
-    games = results[(results["home"] == home) & (results["away"] == away)]
-    game = next((g for g in games.itertuples()
-                 if abs((pd.Timestamp(g.gameday).date() - start.date()).days) <= 2), None)
+    game = _find_game(home, away, start)
     if game is None:
         return None
     abbrs = {abbr for abbr, team in _team_names().items() if team in (home, away)}

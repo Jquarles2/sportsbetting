@@ -4,6 +4,7 @@ nba_api (stats.nba.com) blocks cloud hosts like Streamlit Community Cloud, so we
 balldontlie instead. It needs a free API key, stored as BALLDONTLIE_API_KEY in
 .streamlit/secrets.toml locally, or in the app's Secrets settings on Streamlit Cloud.
 """
+import re
 import threading
 import time
 from datetime import date, timedelta
@@ -73,21 +74,32 @@ def _get(path, params):
     return resp.json()
 
 
+SUFFIXES = {"jr", "sr", "ii", "iii", "iv"}
+
+
+def _name_words(name):
+    """'P.J. Washington' -> ['pj', 'washington']: lowercase, no dots or apostrophes, so spellings match."""
+    return re.sub(r"[.'’]", "", name.lower()).split()
+
+
 def find_player(name):
     """Return the best-matching player dict ({'id', 'first_name', 'last_name', ...}) or None."""
-    words = name.strip().lower().split()
+    words = _name_words(name)
     if not words:
         return None
     key = "bdl_player_" + " ".join(words)  # a player's id never changes, so don't look them up twice
     cached = cache.get(key)
     if cached is not None:
         return cached
-    # The API's search matches single words well, so search the last word, then filter.
-    data = _get("/players", {"search": words[-1], "per_page": 100})["data"]
-    matches = [
-        p for p in data
-        if all(w in f"{p['first_name']} {p['last_name']}".lower() for w in words)
-    ]
+    # The API's search matches single words well, so search the last real name word (not "Jr" or "III",
+    # which would match hundreds of players), then filter.
+    search = next((w for w in reversed(words) if w not in SUFFIXES), words[-1])
+    data = _get("/players", {"search": search, "per_page": 100})["data"]
+    core = [w for w in words if w not in SUFFIXES]  # one source may write "Jr" and the other not
+    matches = [p for p in data
+               if all(w in " ".join(_name_words(f"{p['first_name']} {p['last_name']}")) for w in core)]
+    # Part-word matches are allowed ("Nic" finds "Nicolas"), but an exact full name always comes first.
+    matches.sort(key=lambda p: _name_words(f"{p['first_name']} {p['last_name']}") != words)
     if matches:
         cache.put(key, matches[0])
     return matches[0] if matches else None
@@ -103,6 +115,15 @@ def _fetch_season_stats(player_id, season):
     """All of a player's game stat lines for one season."""
     params = {"player_ids[]": player_id, "seasons[]": season, "per_page": 100}
     return _get("/stats", params)["data"]
+
+
+def _played(stat):
+    """True if the stat line has real minutes. A player who sat out can still get a line with "00" or "0:00"."""
+    minutes = str(stat.get("min") or "0").split(":")[0]
+    try:
+        return float(minutes) > 0
+    except ValueError:
+        return True  # an unexpected format: count the game rather than silently dropping it
 
 
 def _to_row(stat):
@@ -135,7 +156,7 @@ def get_game_logs(name, n=10):
         stats = _fetch_season_stats(player["id"], season)
         if len(stats) < 20:  # early in a season, so also pull last season (20 = most we ever show)
             stats += _fetch_season_stats(player["id"], season - 1)
-        rows = [_to_row(s) for s in stats if s.get("min")]  # skip games they didn't play
+        rows = [_to_row(s) for s in stats if _played(s)]  # skip games they didn't play
         rows.sort(key=lambda r: r["GAME_DATE"], reverse=True)
         cache.put(key, rows)
 
@@ -299,7 +320,7 @@ def get_player_stat(name, market, home, away, start):
     for stat in data:
         game = stat["game"]
         if game["home_team_id"] == team_ids[home] and game["visitor_team_id"] == team_ids[away]:
-            if not stat.get("min"):
+            if not _played(stat):
                 return DID_NOT_PLAY
             row = _to_row(stat)
             row["PRA"] = row["PTS"] + row["REB"] + row["AST"]

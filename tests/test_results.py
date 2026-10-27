@@ -257,3 +257,31 @@ def test_a_mixed_sport_parlay_counts_as_one_ticket():
     scores = {("Hawks", "Owls"): (27, 20), ("Celtics", "Knicks"): (90, 100)}
     results.grade_pending(lambda sport, home, away, start: scores[(home, away)], now=LATER)
     assert results.parlay_record() == {"won": 0, "lost": 1, "pending": 0}   # one leg lost, so the one ticket lost
+
+
+def test_log_parlay_uses_the_betting_day_and_keeps_one_ticket_per_risk(monkeypatch):
+    monkeypatch.setattr(cache, "today", lambda: "2026-01-01")  # e.g. 9 p.m. Eastern, already Jan 2 in UTC
+    first = legs(leg("Moneyline", "Hawks to win", "Hawks", None))
+    assert results.log_parlay("nfl", "Safe", first) is True
+    assert results.log_parlay("nfl", "Safe", first) is False  # the same parlay again: nothing to do
+    assert set(results._legs()["logged_on"]) == {"2026-01-01"}
+    other = legs(leg("Total", "Over 50", None, 50.0, game="Bears @ Lions"))
+    with pytest.raises(results.TicketExists):
+        results.log_parlay("nfl", "Safe", other)  # would silently merge into the first ticket
+    assert results.log_parlay("nfl", "Balanced", other) is True  # another risk level is its own ticket
+    assert results.log_parlay("nba", "Safe", other) is True  # so is another sport
+    assert len(results._legs()) == 3
+
+
+def test_nfl_get_final_refreshes_a_stale_scores_file(monkeypatch):
+    rows = []
+    monkeypatch.setattr(stats_nfl, "_download_results", lambda: list(rows))
+    monkeypatch.setattr(stats_nfl, "_results_refreshed_at", None)
+    stats_nfl._load_results.cache_clear()
+    start = datetime(2026, 1, 1, 18, tzinfo=timezone.utc)
+    assert stats_nfl.get_final("Hawks", "Owls", start) is None  # downloaded this morning, before the game
+    rows.append({"season": 2026, "week": 7, "gameday": "2026-01-01", "home": "Hawks", "away": "Owls",
+                 "home_score": 27, "away_score": 20})
+    assert stats_nfl.get_final("Hawks", "Owls", start) is None  # just refreshed: wait before downloading again
+    monkeypatch.setattr(stats_nfl, "_results_refreshed_at", None)  # 30 minutes later
+    assert stats_nfl.get_final("Hawks", "Owls", start) == (27, 20)
