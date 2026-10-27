@@ -150,21 +150,39 @@ def get_game_lines(sport=NBA, hours=24, include_started=False):
     never costs requests. Games that have already started are left out unless include_started is set:
     their pre-game lines can't be bet anymore.
     """
-    cache_key = lines_cache_key(sport)
-    cached = cache.get(cache_key)
+    cached = cache.get(lines_cache_key(sport))
     if cached is None:
-        events, remaining = _get(
-            f"/sports/{sport}/odds",
-            {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
-        )
-        rows = [parse_game_lines(e) for e in events]  # keep them all; the window is applied below
-        cached = {"rows": [r for r in rows if r], "remaining": remaining}
-        cache.put(cache_key, cached)
+        cached = refresh_game_lines(sport)
 
     grace = 4 if include_started else 0
     rows = [r for r in cached["rows"] if _in_window(r["START"], hours, grace)]
     df = pd.DataFrame(rows, columns=LINE_COLUMNS)
     return df.sort_values("START").reset_index(drop=True), cached["remaining"]
+
+
+def refresh_game_lines(sport):
+    """Buy fresh game lines now, even if today's are cached (costs 3 requests), and save them for the day.
+
+    Lines move during the day (injury news, betting), so the morning's copy can be stale by the evening.
+    The time they were pulled is saved with them, so the page can say how old they are.
+    """
+    events, remaining = _get(
+        f"/sports/{sport}/odds",
+        {"bookmakers": BOOKMAKER, "markets": "h2h,spreads,totals", "oddsFormat": "american"},
+    )
+    rows = [parse_game_lines(e) for e in events]  # keep them all; the window is applied when reading
+    cached = {"rows": [r for r in rows if r], "remaining": remaining,
+              "pulled_at": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    cache.put(lines_cache_key(sport), cached)
+    return cached
+
+
+def lines_pulled_at(sport):
+    """When today's cached game lines were bought, as a UTC datetime, or None if unknown or not loaded."""
+    cached = cache.get(lines_cache_key(sport))
+    if not cached or not cached.get("pulled_at"):
+        return None  # not loaded today, or saved before we started keeping the time
+    return datetime.fromisoformat(cached["pulled_at"])
 
 
 # --- Free calls: The Odds API doesn't charge for /sports or for listing a sport's events. ---

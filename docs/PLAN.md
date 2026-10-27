@@ -35,7 +35,7 @@ Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carrie
 1. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots, now possible in Supabase).
 2. **Verify live**: prop-leg grading, NBA `/player_injuries`, NBA finals (`/games`), and how FanDuel really prices a
    same-game parlay versus the product of odds we show. Then NBA team injury flags and opponent-defense matchups.
-3. **Show when lines were pulled** and offer a refresh button (costs 3 requests), since lines are cached all day.
+3. ~~**Show when lines were pulled** and offer a refresh button~~ Done on the BetGuru tab (3 requests a refresh).
 4. **Learn from the live record**: retrain/recalibrate once there are ≥100 graded legs per sport.
 5. **Phone layout polish** (low priority).
 

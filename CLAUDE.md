@@ -154,15 +154,16 @@ switch the headline back to model chances, and never give props or the NBA a til
 - NBA team-level injury flags and NBA matchups (opponent defense per stat) are not built; NBA injuries are
   per-player only and unverified.
 - No per-user accounts: the no-bet list and record are shared by everyone who opens the app.
-- Lines are cached all day (to save requests), so evening lines can be stale; there is no "pulled at" time or
-  refresh button yet.
+- Lines are cached all day (to save requests). The BetGuru tab shows when they were pulled and has a "Refresh
+  lines" button (3 requests, `odds.refresh_game_lines`, off when fewer than 3 are left); the props tabs' game-lines
+  section has neither yet, and a refresh only re-buys the sport you're on.
 - Phone layout is whatever Streamlit gives by default (owner marked it low priority).
 
 ## Next steps (suggested order)
 1. Morning pre-warm + line-movement snapshots (history can live in Supabase; needs a scheduled job).
 2. Verify live and fix: prop-leg grading, NBA injuries/finals, lotto saving, same-game parlay pricing. Then NBA team
    injuries and opponent-defense matchups.
-3. Show when lines were pulled + a refresh button (costs 3 requests).
+3. (Done: lines pulled-at time + refresh button on the BetGuru tab.)
 4. Once there are ≥100 graded legs per sport, retrain/recalibrate on the live record (extend `train_weights.py` to
    read `picks_log`) and show calibration over time.
 5. Phone layout polish. REA research is a separate session on the owner's machine.

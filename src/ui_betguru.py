@@ -7,7 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from src import games, guru, lotto, nobet, odds, ratings, results, stats_nba, stats_nfl, store, talks
-from src.ui_common import load_cost, quota_left, show_cost
+from src.ui_common import lines_age_text, load_cost, quota_left, show_cost
 
 # What differs between sports: where the lines come from, how far ahead to look, and where each
 # team's recent games, injuries and final scores come from. NBA injuries aren't wired up yet.
@@ -80,7 +80,29 @@ def build_slate(cfg):
     bar.empty()
     teams = sorted(set(lines["HOME"]) | set(lines["AWAY"]))
     flags = guru.team_flags(teams, cfg["injuries"]) if cfg["injuries"] else {t: [] for t in teams}
-    return {"lines": lines, "form": form, "errors": errors, "flags": flags, "remaining": remaining}
+    return {"lines": lines, "form": form, "errors": errors, "flags": flags, "remaining": remaining,
+            "pulled_at": odds.lines_pulled_at(cfg["odds"])}
+
+
+REFRESH_COST = 3  # moneyline, spread and total: one request each, however many games
+
+
+def refresh_slate(cfg, key, state):
+    """Say how old the lines are, with a button to buy fresh ones and rebuild the slate. Returns the slate to use."""
+    st.caption(lines_age_text(state.get("pulled_at")) + " Lines move during the day, so refresh before you bet.")
+    left = quota_left()
+    too_few = left is not None and left < REFRESH_COST
+    if st.button(f"Refresh lines ({REFRESH_COST} Odds API requests)", key=f"{key}_refresh", disabled=too_few):
+        try:
+            odds.refresh_game_lines(cfg["odds"])
+            state = build_slate(cfg)  # same games, new prices; team stats come from today's cache
+            st.session_state[f"{key}_state"] = state
+            st.success("Lines refreshed.")
+        except Exception as e:
+            st.error(f"Couldn't refresh the lines right now: {e}")
+    if too_few:
+        st.caption(f"Only {left} Odds API requests left this month, so refreshing is off.")
+    return state
 
 
 def built_state(cfg):
@@ -338,6 +360,7 @@ def render_betguru():
                 "games and check injuries. Then BetGuru builds your parlay, writes game talks and shows "
                 "who is on the no-bet list.")
         return
+    state = refresh_slate(cfg, key, state)
     if state["lines"].empty:
         st.info("No FanDuel game lines posted yet for this window.")
         return
