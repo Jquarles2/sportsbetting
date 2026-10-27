@@ -23,17 +23,19 @@ Each step is roughly one session. Use `/clear` between steps; `CLAUDE.md` carrie
    - rebrand to BetGuru with BetGuru / NBA props / NFL props tabs
 10. **Durable storage** (Supabase): no-bet list, results record and Odds API answers survive restarts;
     local SQLite fallback when Supabase isn't configured; "Check storage connection" in the app.
-
 11. **Props as parlay legs, lotto of the day, API savings**: prop legs in BetGuru (book's fair odds, consistency
     filters, injury flags, graded from stat lines); a lotto ticket mixing sports; betting-day cache, per-game
     props cache, NFL props default to today, started games never bought.
+12. **Today-only slates, combined slates, legs per game**: the NFL slate is the next 24 hours (not started);
+    parlays combine every built slate; 1 to 3 legs per game with near-duplicate pairs blocked; Supabase
+    connected to a real project and working.
 
 ## Next
 
-1. Connect a real Supabase project and verify it live (code is tested against a fake only).
-2. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots, now possible in Supabase).
-3. **Verify NBA live**: `/player_injuries` and `/games` (team games, finals) were written from docs.
-   Then NBA team injury flags and opponent-defense matchups.
+1. **Morning pre-warm** + **line-movement tracking** (needs stored snapshots, now possible in Supabase).
+2. **Verify live**: prop-leg grading, NBA `/player_injuries`, NBA finals (`/games`), and how FanDuel really prices a
+   same-game parlay versus the product of odds we show. Then NBA team injury flags and opponent-defense matchups.
+3. **Show when lines were pulled** and offer a refresh button (costs 3 requests), since lines are cached all day.
 4. **Learn from the live record**: retrain/recalibrate once there are ≥100 graded legs per sport.
 5. **Phone layout polish** (low priority).
 
