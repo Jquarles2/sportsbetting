@@ -67,6 +67,7 @@ Everything is built around spending as little as possible. What costs requests, 
 | Action | Cost |
 |---|---|
 | Game lines (moneyline, spread, total) for a sport | **3**, once per betting day per sport |
+| "Refresh lines" on the BetGuru tab (fresh prices for the sport you're on) | **3** each time you press it |
 | Player props, one prop type | **1 per game** that you haven't already bought today |
 | Quota balance, game counts, cost estimates | free |
 | Scanning players or teams, parlays, the lotto, game talks, write-ups, grading, filters | free (they use stats sources or Claude, not the Odds API) |
@@ -88,6 +89,10 @@ Rough monthly budget (estimates; games per night vary):
 | + NBA points props every day (around 7 games a night) | 340 |
 | + one NFL prop type on game days (about 13 on a Sunday, 1 on Thursday and Monday) | 400 |
 | + a second NBA prop type every day | over 550, so it blows the budget |
+
+Lines move during the day, and BetGuru shows when they were pulled ("pulled at 9:05 AM Eastern, 6 h ago").
+A refresh before you bet is worth it; refreshing NBA and NFL once each on a typical day adds about 6 requests,
+so about 180 a month if you did it every day. Refresh on the days you actually bet.
 
 Good habits: load lines every day you plan to look, load props only for the one or two prop types you actually
 use, and watch the "requests left" line under the title. If you outgrow the free plan, The Odds API sells paid

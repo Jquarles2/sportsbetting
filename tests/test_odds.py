@@ -226,3 +226,30 @@ def test_props_already_bought_are_served_even_if_the_free_listing_fails(tmp_path
     assert len(df) == 2
     with pytest.raises(requests.ConnectionError):
         odds.get_todays_props(odds.NBA, "player_rebounds", hours=24)    # nothing cached for this one: a real error
+
+
+def test_refresh_game_lines_rebuys_and_saves_the_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(cache, "DB_PATH", tmp_path / "c.db")
+    calls = []
+    monkeypatch.setattr(odds, "_get", lambda path, params: calls.append(path) or ([game_json()], "497"))
+    assert odds.lines_pulled_at(odds.NBA) is None  # nothing loaded yet
+    odds.get_game_lines(odds.NBA, hours=24)
+    first = odds.lines_pulled_at(odds.NBA)
+    assert first is not None and first.tzinfo is not None
+    odds.get_game_lines(odds.NBA, hours=24)
+    assert len(calls) == 1  # cached: free
+    odds.refresh_game_lines(odds.NBA)
+    assert len(calls) == 2  # a refresh always buys (3 requests: the 3 markets are one call)
+    assert odds.lines_pulled_at(odds.NBA) >= first
+    cache.put(odds.lines_cache_key(odds.NFL), {"rows": [], "remaining": "1"})  # saved before times were kept
+    assert odds.lines_pulled_at(odds.NFL) is None
+
+
+def test_lines_age_text():
+    from datetime import datetime, timezone
+    from src.ui_common import lines_age_text
+    pulled = datetime(2026, 1, 5, 14, 5, tzinfo=timezone.utc)  # 9:05 a.m. Eastern in winter
+    assert lines_age_text(pulled, now=datetime(2026, 1, 5, 14, 45, tzinfo=timezone.utc)) == \
+        "FanDuel lines pulled at 9:05 AM Eastern (40 min ago)."
+    assert "(2 h 10 min ago)" in lines_age_text(pulled, now=datetime(2026, 1, 5, 16, 15, tzinfo=timezone.utc))
+    assert "exact time wasn't saved" in lines_age_text(None)

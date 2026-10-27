@@ -287,3 +287,24 @@ def test_legs_per_game_of_three_is_allowed_but_never_a_moneyline_with_a_spread(m
     click(at, "Build today's NFL slate")
     shown = " ".join(m.value for m in at.markdown if m.value.startswith("**"))
     assert not ("to win" in shown and any(f"Hawks {x}" in shown or f"Owls {x}" in shown for x in ("-", "+")))
+
+
+def test_refresh_button_rebuys_the_lines_and_rebuilds_the_slate(monkeypatch):
+    refreshed = []
+    monkeypatch.setattr(odds, "refresh_game_lines", lambda sport: refreshed.append(sport))
+    at = run()
+    click(at, "Build today's NFL slate")
+    assert any("exact time wasn't saved" in c.value for c in at.caption)  # the fakes don't save a time
+    click(at, "Refresh lines")
+    assert not at.exception and refreshed == [odds.NFL]
+    assert any(s.value == "Lines refreshed." for s in at.success) and has_parlay(at)
+
+
+def test_refresh_is_off_when_the_quota_is_too_low(monkeypatch):
+    at = run()
+    click(at, "Build today's NFL slate")
+    monkeypatch.setattr(odds, "requests_remaining", lambda: 2)  # later that day, almost out of requests
+    ui_common.quota_left.clear()
+    at.run()
+    button = next(b for b in at.button if b.label.startswith("Refresh lines"))
+    assert button.disabled
