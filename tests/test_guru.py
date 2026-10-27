@@ -281,3 +281,51 @@ def test_each_players_injury_is_looked_up_once_even_though_he_has_two_legs():
     asked = []
     guru.build_prop_legs(props, scan, "player_points", "points", {}, lambda n: asked.append(n))
     assert sorted(asked) == ["A", "B"]
+
+
+# --- more than one leg per game ---
+
+def sgp_legs():
+    lines = lines_df(("Hawks", "Owls", {}), ("Bears", "Lions", {}))
+    return guru.apply_user_list(guru.build_legs(lines, FORM, P, {}, "nfl"), [])
+
+
+def test_two_legs_per_game_are_allowed_but_never_near_duplicates():
+    out = guru.build_parlay(sgp_legs(), "Aggressive", 4, per_game=2)
+    legs = out["legs"]
+    assert len(legs) == 4 and legs["GAME"].value_counts().max() == 2
+    for _, game in legs.groupby("GAME"):
+        markets = list(game["MARKET"])
+        assert sum(m in ("Moneyline", "Spread") for m in markets) <= 1   # a side and its spread are one bet
+        assert markets.count("Total") <= 1
+
+
+def test_default_is_still_one_leg_per_game():
+    legs = guru.build_parlay(sgp_legs(), "Aggressive", 4)["legs"]
+    assert len(legs) == 2 and legs["GAME"].is_unique
+
+
+def test_one_game_can_make_a_parlay_when_two_legs_per_game_are_allowed():
+    one_game = lines_df(("Hawks", "Owls", {}))
+    legs = guru.apply_user_list(guru.build_legs(one_game, FORM, P, {}, "nfl"), [])
+    assert guru.build_parlay(legs, "Aggressive", 3)["p_all"] is None            # one leg per game: impossible
+    out = guru.build_parlay(legs, "Aggressive", 3, per_game=3)
+    assert len(out["legs"]) == 2 or len(out["legs"]) == 3                        # a side + the total (+ a prop if any)
+    assert out["p_all"] is not None
+
+
+def test_conflicts_between_legs():
+    legs = sgp_legs().set_index("PICK")
+
+    def pair(a, b):
+        return guru.legs_conflict(next(legs.loc[[a]].reset_index().itertuples()), next(legs.loc[[b]].reset_index().itertuples()))
+
+    assert pair("Hawks to win", "Hawks -4.5")          # moneyline and spread: the same bet
+    assert pair("Hawks to win", "Owls +4.5")
+    assert pair("Over 44.5", "Under 44.5")             # two totals
+    assert not pair("Hawks to win", "Over 44.5")       # a side with the total is allowed (they're linked, and we say so)
+    assert not pair("Hawks -4.5", "Under 44.5")
+    prop = guru.build_prop_legs(props_table(("Wide Out", "Owls @ Hawks", 60.5, -110, -110)),
+                                scan_table(**{"Wide Out": [80] * 10}), "player_reception_yds", "receiving yards", {})
+    over, under = list(prop.itertuples())
+    assert guru.legs_conflict(over, under)             # one player twice

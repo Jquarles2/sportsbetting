@@ -16,7 +16,7 @@ Backtests on 14 seasons of real NFL historical lines (`scripts/train_weights.py`
 form adds **no reliable edge** over the market: spread ~50%, totals ~50–53% (break-even at -110 is
 52.4%; ±4% is noise on the validation set). Bayesian optimization shrank the model's tilts to ~0, so
 its probabilities track the book's. The NBA has no free historical lines, so it is **untrained** and uses
-zero tilt (its chances are exactly the book's). BetGuru's value is discipline (skip untrusted legs, one leg per game, real EV
+zero tilt (its chances are exactly the book's). BetGuru's value is discipline (skip untrusted legs, no near-duplicate legs, real EV
 math, a graded record), not a secret edge. Never write copy that promises winners or profit; parlay EV
 is always negative because of the vig. Keep the "How the model is doing" panel honest.
 
@@ -79,7 +79,13 @@ labelled "don't trust this" number. Never switch the headline back to model chan
 - `src/guru.py`: legs (game legs, plus prop legs from `build_prop_legs`), flags, no-bet list, parlay builder
   (Safe / Balanced / Aggressive). Prop legs: MARKET `Prop:<odds market>`, priced at the book's no-vig odds
   (never a model edge), filtered by recent hit rate (`SUPPORT`, `PROFILES[...]["prop_support"]`).
-- `src/lotto.py`: the lotto ticket (long shot for a small stake; best price per risk, one leg per game,
+- Legs per game (UI default 2, function default 1): `guru.legs_conflict` forbids near-duplicate pairs (moneyline with
+  spread, two totals, one player twice). Same-game legs are correlated, so the chance and payout shown assume
+  independence and the UI says FanDuel's same-game price can differ. Don't claim an SGP payout is exact.
+- Parlays combine every built slate by default ("Combine with my other built slates"): legs carry a `SPORT`
+  column, and a cross-sport parlay is logged with risk `"<risk> (mixed)"` so the record counts it as one ticket
+  (same for `Lotto`). A slate with fewer than two games can't make a parlay or a lotto ticket.
+- `src/lotto.py`: the lotto ticket (long shot for a small stake; best price per risk, up to `per_game` compatible legs per game,
   trims unneeded legs; mixes sports and props; the headline numbers are the book's fair odds).
 - `src/talks.py`, `src/writeups.py`, `src/claude.py`: Claude-written game talks and pick write-ups.
 - `src/store.py`: storage backends (SQLiteStore, SupabaseStore) and `get_store()`. All persistence goes

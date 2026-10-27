@@ -277,8 +277,29 @@ def _rank(legs, how):
     return legs.sort_values(["EDGE", "P"], ascending=False)
 
 
-def build_parlay(legs, risk, n_legs):
-    """Pick the best parlay for a risk level: at most one leg per game, never a blocked leg.
+def legs_conflict(a, b):
+    """True if two legs from the same game shouldn't be in one parlay because they're nearly the same bet.
+
+    The moneyline and the spread are one bet in two costumes; two totals contradict or repeat each other;
+    two props on one player repeat him. Other pairs (a side with the total, props with the total, props on
+    different players) are allowed, but they're still linked: see build_parlay.
+    """
+    sides = ("Moneyline", "Spread")
+    if a.MARKET in sides and b.MARKET in sides:
+        return True
+    if a.MARKET == "Total" and b.MARKET == "Total":
+        return True
+    if str(a.MARKET).startswith(PROP_PREFIX) and str(b.MARKET).startswith(PROP_PREFIX) and a.PLAYER == b.PLAYER:
+        return True
+    return a.PICK == b.PICK
+
+
+def build_parlay(legs, risk, n_legs, per_game=1):
+    """Pick the best parlay for a risk level: at most `per_game` legs from any one game, never a blocked leg.
+
+    Legs from the same game are linked (a winning team is likelier to cover, a shootout moves the total), so
+    the chance shown multiplies them as if independent, and the sportsbook will price them as a same-game
+    parlay, which differs from multiplying separate odds. legs_conflict rules out the near-duplicate pairs.
 
     Returns a dict with 'legs' (DataFrame), 'p_all' (the model's chance every leg hits, assuming
     independent games), 'decimal' and 'american' (the payout odds), and 'message' (set when there
@@ -297,12 +318,13 @@ def build_parlay(legs, risk, n_legs):
     is_prop = eligible["MARKET"].str.startswith(PROP_PREFIX)
     eligible = eligible[~is_prop | (eligible["SUPPORT"] >= profile["prop_support"])]  # props must also be consistent
 
-    chosen, used = [], set()
+    chosen, by_game = [], {}
     for leg in _rank(eligible, profile["rank"]).itertuples():
-        if leg.GAME in used:
+        in_game = by_game.setdefault(leg.GAME, [])
+        if len(in_game) >= per_game or any(legs_conflict(leg, other) for other in in_game):
             continue
         chosen.append(leg._asdict())
-        used.add(leg.GAME)
+        in_game.append(leg)
         if len(chosen) == n_legs:
             break
     picked = pd.DataFrame(chosen).drop(columns=["Index", "SCORE"], errors="ignore")

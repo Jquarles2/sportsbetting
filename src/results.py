@@ -124,8 +124,8 @@ def parlay_record():
     if df.empty:
         return {"won": 0, "lost": 0, "pending": 0}
     counts = {"won": 0, "lost": 0, "pending": 0}
-    # A lotto ticket can span sports, so it's one parlay per day whatever its legs' sports.
-    df = df.assign(ticket=[(d, "all", r) if r == "Lotto" else (d, sp, r)
+    # A lotto ticket, or a parlay saved as "<risk> (mixed)", can span sports: one parlay per day and risk.
+    df = df.assign(ticket=[(d, "all", r) if r == "Lotto" or r.endswith("(mixed)") else (d, sp, r)
                            for d, sp, r in zip(df["logged_on"], df["sport"], df["risk"])])
     for _, g in df.groupby("ticket"):
         if (g["result"] == "loss").any():

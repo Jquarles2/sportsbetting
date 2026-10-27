@@ -22,8 +22,11 @@ def _efficiency(leg):
     return math.log(decimal) / -math.log(leg.P_MARKET)
 
 
-def build_lotto(legs, stake=0.50, target_profit=1000.0):
+def build_lotto(legs, stake=0.50, target_profit=1000.0, per_game=1):
     """Build the ticket from candidate legs (guru.build_legs / build_prop_legs output).
+
+    per_game is how many legs one game may contribute (see guru.legs_conflict for the pairs that are never
+    allowed together). Legs from one game are linked, so the chance shown is only an estimate.
 
     Returns a dict with 'legs', 'decimal', 'american', 'profit' (what a win pays on top of the stake),
     'p_all' (the book's fair chance every leg hits), 'one_in', 'ev' (expected profit per ticket, always
@@ -41,11 +44,20 @@ def build_lotto(legs, stake=0.50, target_profit=1000.0):
         return {"legs": eligible, "decimal": None, "american": None, "profit": None, "p_all": None,
                 "one_in": None, "ev": None, "message": "No legs are available for a ticket right now."}
 
-    best_per_game = [max(group.itertuples(), key=_efficiency) for _, group in eligible.groupby("GAME")]
-    best_per_game.sort(key=_efficiency, reverse=True)
+    # Best price for the risk first, taking at most per_game compatible legs from each game.
+    usable, by_game = [], {}
+    for leg in sorted(eligible.itertuples(), key=_efficiency, reverse=True):
+        in_game = by_game.setdefault(leg.GAME, [])
+        if len(in_game) < per_game and not any(guru.legs_conflict(leg, other) for other in in_game):
+            in_game.append(leg)
+            usable.append(leg)
+    if len(usable) < 2:
+        return {"legs": eligible.iloc[0:0], "decimal": None, "american": None, "profit": None, "p_all": None,
+                "one_in": None, "ev": None,
+                "message": "A lotto ticket needs at least two legs. Build the other sport's slate, or allow more legs per game."}
 
     chosen, decimal = [], 1.0
-    for leg in best_per_game:
+    for leg in usable:
         chosen.append(leg)
         decimal *= ratings.american_to_decimal(leg.PRICE)
         if decimal >= target_decimal:

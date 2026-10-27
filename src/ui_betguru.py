@@ -83,6 +83,12 @@ def build_slate(cfg):
     return {"lines": lines, "form": form, "errors": errors, "flags": flags, "remaining": remaining}
 
 
+def built_state(cfg):
+    """The saved slate for a sport if it has been built and has games, else None."""
+    state = st.session_state.get(f"bg_{cfg['code']}_state")
+    return state if state and not state["lines"].empty else None
+
+
 def make_legs(cfg, state, my_list, use_props):
     """Every candidate leg for one built slate: games, plus loaded props if wanted, with your list applied."""
     params = ratings.load_params(cfg["code"])
@@ -96,22 +102,18 @@ def make_legs(cfg, state, my_list, use_props):
     return legs.assign(SPORT=cfg["code"]), prop_labels, unchecked
 
 
-def show_lotto(my_list, use_props):
+def show_lotto(my_list, use_props, per_game):
     """The lotto ticket: a small stake on a long shot, built from every slate you've built today."""
     st.caption("A bit of fun: a small stake on a long shot, like a lottery ticket. It combines every slate "
-               "you've built today (and the props you've loaded) to reach the payout you pick, with one leg per game.")
+               "you've built today (and the props you've loaded) to reach the payout you pick.")
     left, right = st.columns(2)
     stake = left.number_input("Stake ($)", min_value=0.10, max_value=10.0, value=0.50, step=0.10, key="bg_lotto_stake")
     dream = right.select_slider("Win up to ($)", options=[100, 250, 500, 1000, 2500, 5000], value=1000, key="bg_lotto_dream")
-    frames = []
-    for cfg in SPORTS.values():
-        built = st.session_state.get(f"bg_{cfg['code']}_state")
-        if built and not built["lines"].empty:
-            frames.append(make_legs(cfg, built, my_list, use_props)[0])
+    frames = [make_legs(cfg, built_state(cfg), my_list, use_props)[0] for cfg in SPORTS.values() if built_state(cfg)]
     if not frames:
         st.info("Build a slate first and the lotto ticket appears here.")
         return
-    ticket = lotto.build_lotto(pd.concat(frames, ignore_index=True), stake, dream)
+    ticket = lotto.build_lotto(pd.concat(frames, ignore_index=True), stake, dream, per_game)
     if ticket["p_all"] is None:
         st.info(ticket["message"])
         return
@@ -124,6 +126,9 @@ def show_lotto(my_list, use_props):
         st.info(ticket["message"])
     for leg in ticket["legs"].itertuples():
         st.markdown(f"**{leg.PICK}** ({leg.PRICE:+.0f}) - {leg.GAME}")
+    if ticket["legs"]["GAME"].duplicated().any():
+        st.caption("Some legs share a game, so they're linked and FanDuel will price them as a same-game parlay. "
+                   "The payout and the chance above are estimates that treat the legs as independent.")
     st.caption("Treat it as a lottery ticket: it will almost always lose the stake. The chance is the book's own "
                "fair chance for every leg multiplied together, and the expected result is always below zero. "
                "Only play what you'd happily spend.")
@@ -135,9 +140,15 @@ def show_lotto(my_list, use_props):
             st.error(f"Couldn't save the ticket: {e}")
 
 
-def show_parlay(code, risk, parlay):
+def show_parlay(code, risk, parlay, n_games, per_game):
+    """n_games is how many different games we could pick from; with one leg per game, fewer than 2 can't make a parlay."""
     if parlay["message"]:
-        st.info(parlay["message"])
+        if parlay["p_all"] is None and n_games * per_game < 2:
+            st.info(f"Only {n_games} game{'s' if n_games != 1 else ''} to pick from, and a parlay needs at least two "
+                    "legs from different games. Allow more legs per game, or build the other sport's slate and tick "
+                    "\"Combine with my other built slates\".")
+        else:
+            st.info(parlay["message"])
     legs = parlay["legs"]
     if parlay["p_all"] is None:
         return
@@ -150,6 +161,10 @@ def show_parlay(code, risk, parlay):
         st.caption(leg.WHY)
         for flag in leg.FLAGS:
             st.caption(f"⚠️ {flag['reason']}")
+    if legs["GAME"].duplicated().any():
+        st.caption("Some legs share a game, so they're linked (a winning team is likelier to cover, a shootout moves "
+                   "the total). FanDuel prices that as a same-game parlay, so its payout can differ from the "
+                   "number above, and the chance treats the legs as independent.")
     st.caption("Expected value is what you should expect on average if BetGuru has no edge: the book's own "
                "fair chances against the real prices. It is always negative, because the sportsbook takes a "
                "cut on every leg and the cut multiplies with each added leg.")
@@ -159,7 +174,8 @@ def show_parlay(code, risk, parlay):
                "trust and shows you the real math.")
     if st.button("Save this parlay to my record", key=f"bg_{code}_save"):
         try:
-            results.log_parlay(code, risk, legs)
+            mixed = legs["SPORT"].nunique() > 1  # each leg keeps its own sport; the label groups them as one ticket
+            results.log_parlay(code, f"{risk} (mixed)" if mixed else risk, legs)
             st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
         except store.StoreError as e:
             st.error(f"Couldn't save the parlay: {e}")
@@ -292,11 +308,13 @@ def render_betguru():
     st.session_state["bg_code"] = code
     key = f"bg_{code}"
 
-    left, right = st.columns(2)
+    left, middle, right = st.columns(3)
     risk = left.select_slider("Risk level", options=list(guru.PROFILES), value="Balanced", key="bg_risk")
-    n_legs = right.slider("Legs", 2, 6, 3, key="bg_legs")
+    n_legs = middle.slider("Legs", 2, 6, 3, key="bg_legs")
+    per_game = right.select_slider("Legs per game", options=[1, 2, 3], value=2, key="bg_per_game")
     st.caption(guru.PROFILES[risk]["blurb"])
     use_props = st.checkbox("Include player props I've loaded", value=True, key=f"{key}_useprops")
+    combine = st.checkbox("Combine with my other built slates", value=True, key="bg_combine")
     st.caption("The slate is today's games: those starting in the next 24 hours that haven't kicked off yet.")
 
     too_expensive = show_cost(load_cost(cfg["odds"], cfg["hours"]))
@@ -338,18 +356,25 @@ def render_betguru():
     elif use_props:
         st.caption(f"No props loaded for today's games. Load and scan them in the {sport_label} props tab and "
                    "they'll appear here with no extra Odds API requests.")
-    parlay = guru.build_parlay(legs, risk, n_legs)
+    parlay_legs = legs
+    if combine:  # mix in every other sport whose slate has been built, so a one-game night can still make a parlay
+        others = [c for c in SPORTS.values() if c is not cfg and built_state(c)]
+        if others:
+            parlay_legs = pd.concat([legs] + [make_legs(c, built_state(c), my_list, use_props)[0] for c in others],
+                                    ignore_index=True)
+            st.caption("Parlay legs come from: " + ", ".join(sorted({c["code"].upper() for c in others} | {code.upper()})) + ".")
+    parlay = guru.build_parlay(parlay_legs, risk, n_legs, per_game)
 
     parlay_tab, lotto_tab, talks_tab, nobet_tab, model_tab = st.tabs(
         ["Parlay", "Lotto", "Game talks", "No-bet list", "Model and record"])
     with parlay_tab:
-        show_parlay(code, risk, parlay)
+        show_parlay(code, risk, parlay, parlay_legs["GAME"].nunique(), per_game)
         with st.expander("Every candidate leg"):
-            shown = legs.assign(P=(legs["P"] * 100).round(1), EDGE=(legs["EDGE"] * 100).round(1))
+            shown = parlay_legs.assign(P=(parlay_legs["P"] * 100).round(1), EDGE=(parlay_legs["EDGE"] * 100).round(1))
             st.dataframe(shown[["PICK", "GAME", "PRICE", "P", "EDGE", "SEVERITY", "USER_REASON"]]
                          .sort_values("P", ascending=False), hide_index=True)
     with lotto_tab:
-        show_lotto(my_list, use_props)
+        show_lotto(my_list, use_props, per_game)
     with talks_tab:
         show_talks(key, state, params)
     with nobet_tab:
