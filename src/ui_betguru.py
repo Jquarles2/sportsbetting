@@ -134,8 +134,12 @@ def show_lotto(my_list, use_props, per_game):
                "Only play what you'd happily spend.")
     if st.button("Save this ticket to my record", key="bg_lotto_save"):
         try:
-            results.log_parlay("lotto", lotto.LOTTO_RISK, ticket["legs"])  # each leg keeps its own sport
-            st.success("Saved. It's graded with the rest on the Model and record tab.")
+            if results.log_parlay("lotto", lotto.LOTTO_RISK, ticket["legs"]):  # each leg keeps its own sport
+                st.success("Saved. It's graded with the rest on the Model and record tab.")
+            else:
+                st.info("This ticket is already saved.")
+        except results.TicketExists:
+            st.warning("You already saved a different lotto ticket today. The record keeps one a day.")
         except store.StoreError as e:
             st.error(f"Couldn't save the ticket: {e}")
 
@@ -175,8 +179,12 @@ def show_parlay(code, risk, parlay, n_games, per_game):
     if st.button("Save this parlay to my record", key=f"bg_{code}_save"):
         try:
             mixed = legs["SPORT"].nunique() > 1  # each leg keeps its own sport; the label groups them as one ticket
-            results.log_parlay(code, f"{risk} (mixed)" if mixed else risk, legs)
-            st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
+            if results.log_parlay(code, f"{risk} (mixed)" if mixed else risk, legs):
+                st.success("Saved. Grade finished games on the Model and record tab to see how it did.")
+            else:
+                st.info("This parlay is already saved.")
+        except results.TicketExists as e:
+            st.warning(str(e))
         except store.StoreError as e:
             st.error(f"Couldn't save the parlay: {e}")
 
