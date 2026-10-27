@@ -5,7 +5,8 @@ A personal NBA/NFL betting research app, built to be honest about what the numbe
 ## What it does
 
 **BetGuru tab (team vs team)**
-- Loads FanDuel moneylines, spreads and totals for today's games (NBA) or this week's (NFL).
+- Loads FanDuel moneylines, spreads and totals for today's games: those starting in the next 24 hours that
+  haven't kicked off yet (both sports).
 - Scans each team's recent games and, for the NFL, the weekly injury report.
 - **Parlay builder** with a **risk level** (Safe / Balanced / Aggressive), a leg count, and **legs per game**
   (1 to 3, default 2). It never uses a leg it doesn't trust, and it shows the expected value at fair odds
@@ -98,7 +99,7 @@ plans with far more requests (check their pricing page).
 python -m pytest
 ```
 
-About 95 tests, none need the network. `tests/test_app.py` runs the whole app headlessly with fake data.
+About 175 tests, none need the network. `tests/test_app.py` runs the whole app headlessly with fake data.
 
 ## Retrain the NFL model
 
